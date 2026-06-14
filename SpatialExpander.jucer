@@ -9,25 +9,23 @@
             file="Source/PluginProcessor.h"/>
       <FILE id="ProcC" name="PluginProcessor.cpp" compile="1" resource="0"
             file="Source/PluginProcessor.cpp"/>
-      <FILE id="EdH"   name="PluginEditor.h" compile="0" resource="0"
-            file="Source/PluginEditor.h"/>
-      <FILE id="EdC"   name="PluginEditor.cpp" compile="1" resource="0"
-            file="Source/PluginEditor.cpp"/>
-      <FILE id="STFTH" name="StereoSTFT.h" compile="0" resource="0"
-            file="Source/DSP/StereoSTFT.h"/>
-      <FILE id="STFTC" name="StereoSTFT.cpp" compile="1" resource="0"
-            file="Source/DSP/StereoSTFT.cpp"/>
-      <FILE id="LFEEH" name="LFEExtractor.h" compile="0" resource="0"
-            file="Source/DSP/LFEExtractor.h"/>
-      <FILE id="LFEEC" name="LFEExtractor.cpp" compile="1" resource="0"
-            file="Source/DSP/LFEExtractor.cpp"/>
+      <FILE id="EdH" name="PluginEditor.h" compile="0" resource="0" file="Source/PluginEditor.h"/>
+      <FILE id="EdC" name="PluginEditor.cpp" compile="1" resource="0" file="Source/PluginEditor.cpp"/>
+      <FILE id="STFTH" name="StereoSTFT.h" compile="0" resource="0" file="Source/DSP/StereoSTFT.h"/>
+      <FILE id="STFTC" name="StereoSTFT.cpp" compile="1" resource="0" file="Source/DSP/StereoSTFT.cpp"/>
+      <FILE id="LFEEH" name="LFEExtractor.h" compile="0" resource="0" file="Source/DSP/LFEExtractor.h"/>
+      <FILE id="LFEEC" name="LFEExtractor.cpp" compile="1" resource="0" file="Source/DSP/LFEExtractor.cpp"/>
     </GROUP>
   </MAINGROUP>
   <MODULES>
     <MODULE id="juce_audio_basics" showAllCode="1" useLocalCopy="0" useGlobalPath="1"/>
     <MODULE id="juce_audio_devices" showAllCode="1" useLocalCopy="0" useGlobalPath="1"/>
-    <MODULE id="juce_audio_plugin_client" showAllCode="1" useLocalCopy="0" useGlobalPath="1"/>
+    <MODULE id="juce_audio_formats" showAllCode="1" useLocalCopy="0" useGlobalPath="1"/>
+    <MODULE id="juce_audio_plugin_client" showAllCode="1" useLocalCopy="0"
+            useGlobalPath="1"/>
     <MODULE id="juce_audio_processors" showAllCode="1" useLocalCopy="0" useGlobalPath="1"/>
+    <MODULE id="juce_audio_processors_headless" showAllCode="1" useLocalCopy="0"
+            useGlobalPath="1"/>
     <MODULE id="juce_audio_utils" showAllCode="1" useLocalCopy="0" useGlobalPath="1"/>
     <MODULE id="juce_core" showAllCode="1" useLocalCopy="0" useGlobalPath="1"/>
     <MODULE id="juce_data_structures" showAllCode="1" useLocalCopy="0" useGlobalPath="1"/>
@@ -45,18 +43,8 @@
         <CONFIGURATION isDebug="0" name="Release" targetName="SpatialExpander"/>
       </CONFIGURATIONS>
       <MODULEPATHS>
-        <MODULEPATH id="juce_audio_basics" path="D:\Program Files\juce-8.0.13-windows\JUCE\modules"/>
-        <MODULEPATH id="juce_audio_devices" path="D:\Program Files\juce-8.0.13-windows\JUCE\modules"/>
-        <MODULEPATH id="juce_audio_plugin_client" path="D:\Program Files\juce-8.0.13-windows\JUCE\modules"/>
-        <MODULEPATH id="juce_audio_processors" path="D:\Program Files\juce-8.0.13-windows\JUCE\modules"/>
-        <MODULEPATH id="juce_audio_utils" path="D:\Program Files\juce-8.0.13-windows\JUCE\modules"/>
-        <MODULEPATH id="juce_core" path="D:\Program Files\juce-8.0.13-windows\JUCE\modules"/>
-        <MODULEPATH id="juce_data_structures" path="D:\Program Files\juce-8.0.13-windows\JUCE\modules"/>
-        <MODULEPATH id="juce_dsp" path="D:\Program Files\juce-8.0.13-windows\JUCE\modules"/>
-        <MODULEPATH id="juce_events" path="D:\Program Files\juce-8.0.13-windows\JUCE\modules"/>
-        <MODULEPATH id="juce_graphics" path="D:\Program Files\juce-8.0.13-windows\JUCE\modules"/>
-        <MODULEPATH id="juce_gui_basics" path="D:\Program Files\juce-8.0.13-windows\JUCE\modules"/>
-        <MODULEPATH id="juce_gui_extra" path="D:\Program Files\juce-8.0.13-windows\JUCE\modules"/>
+        <MODULEPATH id="juce_audio_processors_headless" path="../../Program Files/juce-8.0.13-windows/JUCE/modules"/>
+        <MODULEPATH id="juce_audio_formats" path="../../Program Files/juce-8.0.13-windows/JUCE/modules"/>
       </MODULEPATHS>
     </XCODE_MAC>
     <VS2022 targetFolder="Builds/VisualStudio2022">
@@ -65,18 +53,8 @@
         <CONFIGURATION isDebug="0" name="Release" targetName="SpatialExpander"/>
       </CONFIGURATIONS>
       <MODULEPATHS>
-        <MODULEPATH id="juce_audio_basics" path="D:\Program Files\juce-8.0.13-windows\JUCE\modules"/>
-        <MODULEPATH id="juce_audio_devices" path="D:\Program Files\juce-8.0.13-windows\JUCE\modules"/>
-        <MODULEPATH id="juce_audio_plugin_client" path="D:\Program Files\juce-8.0.13-windows\JUCE\modules"/>
-        <MODULEPATH id="juce_audio_processors" path="D:\Program Files\juce-8.0.13-windows\JUCE\modules"/>
-        <MODULEPATH id="juce_audio_utils" path="D:\Program Files\juce-8.0.13-windows\JUCE\modules"/>
-        <MODULEPATH id="juce_core" path="D:\Program Files\juce-8.0.13-windows\JUCE\modules"/>
-        <MODULEPATH id="juce_data_structures" path="D:\Program Files\juce-8.0.13-windows\JUCE\modules"/>
-        <MODULEPATH id="juce_dsp" path="D:\Program Files\juce-8.0.13-windows\JUCE\modules"/>
-        <MODULEPATH id="juce_events" path="D:\Program Files\juce-8.0.13-windows\JUCE\modules"/>
-        <MODULEPATH id="juce_graphics" path="D:\Program Files\juce-8.0.13-windows\JUCE\modules"/>
-        <MODULEPATH id="juce_gui_basics" path="D:\Program Files\juce-8.0.13-windows\JUCE\modules"/>
-        <MODULEPATH id="juce_gui_extra" path="D:\Program Files\juce-8.0.13-windows\JUCE\modules"/>
+        <MODULEPATH id="juce_audio_processors_headless" path="../../Program Files/juce-8.0.13-windows/JUCE/modules"/>
+        <MODULEPATH id="juce_audio_formats" path="../../Program Files/juce-8.0.13-windows/JUCE/modules"/>
       </MODULEPATHS>
     </VS2022>
   </EXPORTFORMATS>

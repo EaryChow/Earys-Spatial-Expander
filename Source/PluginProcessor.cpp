@@ -4,7 +4,7 @@
 SpatialExpanderAudioProcessor::SpatialExpanderAudioProcessor()
     : AudioProcessor (BusesProperties()
                       .withInput  ("Input",  juce::AudioChannelSet::stereo(), true)
-                      .withOutput ("Output", juce::AudioChannelSet::surround71(), true))
+                      .withOutput ("Output", juce::AudioChannelSet::create7point1(), true))
 {
 }
 
@@ -19,7 +19,7 @@ bool SpatialExpanderAudioProcessor::isBusesLayoutSupported (const BusesLayout& l
 {
     if (layouts.getMainInputChannelSet() != juce::AudioChannelSet::stereo())
         return false;
-    if (layouts.getMainOutputChannelSet() != juce::AudioChannelSet::surround71())
+    if (layouts.getMainOutputChannelSet() != juce::AudioChannelSet::create7point1())
         return false;
     return true;
 }
@@ -51,7 +51,7 @@ void SpatialExpanderAudioProcessor::processBlock (juce::AudioBuffer<float>& buff
     auto* inL = buffer.getReadPointer (0);
     auto* inR = buffer.getReadPointer (1);
 
-    auto** channelData = buffer.getArrayOfWritePointers();
+    auto* const* channelData = buffer.getArrayOfWritePointers();
     for (int ch = 0; ch < numOut; ++ch)
         juce::FloatVectorOperations::fill (channelData[ch], 0.0f, numSamples);
 

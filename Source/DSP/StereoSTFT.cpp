@@ -4,7 +4,7 @@ StereoSTFT::StereoSTFT() : fft (fftOrder) {}
 
 void StereoSTFT::prepare (double sampleRate)
 {
-    this->sampleRate = sampleRate;
+    sampleRate_ = sampleRate;
 
     window.resize (fftSize);
     for (int i = 0; i < fftSize; ++i)
@@ -53,7 +53,7 @@ void StereoSTFT::reset()
 
 double StereoSTFT::getLatencyMs() const noexcept
 {
-    return static_cast<double> (fftSize) / sampleRate * 1000.0;
+    return static_cast<double> (fftSize) / sampleRate_ * 1000.0;
 }
 
 void StereoSTFT::process (const float* inL, const float* inR,

@@ -6,7 +6,7 @@ SpatialExpanderAudioProcessorEditor::SpatialExpanderAudioProcessorEditor (
     : AudioProcessorEditor (p), processor (p)
 {
     titleLabel.setText ("Spatial Expander", juce::dontSendNotification);
-    titleLabel.setFont (juce::Font (18.0f, juce::Font::bold));
+    titleLabel.setFont (juce::Font (juce::FontOptions (18.0f, juce::Font::bold)));
     titleLabel.setJustificationType (juce::Justification::centred);
     addAndMakeVisible (titleLabel);
 

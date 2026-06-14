@@ -35,7 +35,7 @@ private:
     int outRp = 0;
     int outReady = 0;
     int framesCompleted = 0;
-    double sampleRate = 48000.0;
+    double sampleRate_ = 48000.0;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (StereoSTFT)
 };
