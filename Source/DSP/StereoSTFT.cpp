@@ -21,7 +21,7 @@ void StereoSTFT::prepare (double sampleRate)
     inWp = 0;
     totalIn = 0;
     outWp = 0;
-    outRp = hopSize;
+    outRp = 0;
     outReady = 0;
     framesCompleted = 0;
 }
@@ -46,7 +46,7 @@ void StereoSTFT::reset()
     inWp = 0;
     totalIn = 0;
     outWp = 0;
-    outRp = hopSize;
+    outRp = 0;
     outReady = 0;
     framesCompleted = 0;
 }
@@ -75,6 +75,10 @@ void StereoSTFT::process (const float* inL, const float* inR,
         {
             outL[i] = outBufL[outRp];
             outR[i] = outBufR[outRp];
+
+            outBufL[outRp] = 0.0f;
+            outBufR[outRp] = 0.0f;
+
             outRp = (outRp + 1) % outBufSize;
             --outReady;
         }
@@ -105,12 +109,11 @@ void StereoSTFT::processFrame()
     fft.performRealOnlyInverseTransform (fftBufL.data());
     fft.performRealOnlyInverseTransform (fftBufR.data());
 
-    float scale = 1.0f / static_cast<float> (fftSize);
     for (int i = 0; i < fftSize; ++i)
     {
         int pos = (outWp + i) % outBufSize;
-        outBufL[pos] += fftBufL[i] * scale;
-        outBufR[pos] += fftBufR[i] * scale;
+        outBufL[pos] += fftBufL[i];
+        outBufR[pos] += fftBufR[i];
     }
     outWp = (outWp + hopSize) % outBufSize;
 

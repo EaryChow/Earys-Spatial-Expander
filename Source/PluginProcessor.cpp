@@ -52,7 +52,8 @@ void SpatialExpanderAudioProcessor::processBlock (juce::AudioBuffer<float>& buff
     auto* inR = buffer.getReadPointer (1);
 
     auto* const* channelData = buffer.getArrayOfWritePointers();
-    for (int ch = 0; ch < numOut; ++ch)
+
+    for (int ch = 2; ch < numOut; ++ch)
         juce::FloatVectorOperations::fill (channelData[ch], 0.0f, numSamples);
 
     stft.process (inL, inR, stftOutBufL.data(), stftOutBufR.data(), numSamples);
