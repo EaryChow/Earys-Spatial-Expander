@@ -1,475 +1,357 @@
-# **Spatial Expander Plugin — Developer Specification**
-
-## 1. Objective
-Real-time stereo-to-multichannel creative spatial expander (VST3/AU/AAX). Converts stereo into 7.1, 9.1, or 7.1.4/9.1.4 by stretching the original stereo field to a wider speaker ring. Targets music producers and immersive playback.
-
-**Latency target:** ≤ 10.7 ms.
+I'll design the complete algorithm for your phantom-center milestone and the full cascade. This is a mathematical specification your developer can implement directly.
 
 ---
 
-## 2. Rationale for the Stretch
+# **Phantom Center Extraction Algorithm — Developer Specification**
 
-When a mixer pans a source hard left in a stereo mix, they are not specifying an absolute angle of −30°. They are specifying *"this source should occupy the maximum leftward extent available in this playback system."* On headphones, that extent is inside the left ear. On stereo speakers, it is the left speaker at −30°. In a 360° ring, the maximum leftward extent is the rear-left speaker at −150°.
+## 1. What This Algorithm Does
 
-The stretch is therefore a **geometric rescaling** that preserves the relational structure of the stereo field (center is center, moderate-left is moderate-left, extreme-left is extreme-left) while adapting that structure to a new speaker topology. It is analogous to an anamorphic lens stretching a 16:9 image to fill a 2.39:1 screen: relative proportions are preserved; absolute geometry is adapted to the display.
+Takes a stereo pair `(L, R)` and decomposes it into three full-bandwidth, timbrally coherent channels:
 
-**Architecture:** Object-Grouping STFT. A single short STFT frame groups adjacent frequency bins into coherent "objects" based on spatial similarity, then routes each object as a whole via a tent-map panning law.
+- **Center (C):** The correlated component shared by both channels.
+- **Left Residual (Lᵣₑₛ):** Everything in the left channel that is not in the center.
+- **Right Residual (Rᵣₑₛ):** Everything in the right channel that is not in the center.
 
-**Rejected:** cascading extraction (latency stacks), ambisonics (cannot solo at speaker angles), per-bin STFT (destroys coherence), multi-band IIR filterbank (inter-band delay, coarse resolution).
+**The two non-negotiable properties:**
+1. **True separation:** If you phase-invert `C` and add it to `L`, you get `Lᵣₑₛ` with no audible center leakage. Same for `R`.
+2. **Lossless reconstruction:** `2·C + Lᵣₑₛ + Rᵣₑₛ = L + R` exactly (within floating-point precision).
+
+This is achieved with a single STFT frame and a per-bin Wiener-like extraction. No temporal tracking, no object grouping, no per-bin routing.
 
 ---
 
-## 3. Signal Flow
+## 2. STFT Framework
+
+| Parameter | Value | Notes |
+|-----------|-------|-------|
+| **Window** | Hann | `w[n] = 0.5 · (1 – cos(2πn/N))` |
+| **Overlap** | 50% | Hop size = `N/2` |
+| **FFT Size** | `N` (no zero-padding) | Same as window size |
+| **Latency** | `N` samples | e.g., 21.3 ms @ 48 kHz for `N=1024` |
+| **Sample Rates** | 44.1 / 48 / 96 kHz | Host-determined |
+
+### 2.1 Perfect Reconstruction (Critical)
+With Hann + 50% overlap, the **analysis** windows satisfy COLA (sum to 1.0).  
+However, because we modify spectra and then window again for synthesis, we need the **synthesis** window to compensate for the squared overlap:
+
+**Synthesis window:**
+```
+w_synth[n] = w[n] / (w[n]² + w[n + N/2]²)
+```
+
+For Hann, the denominator simplifies to `0.5 · (1 + cos²(2πn/N))`.  
+Using `w_synth` guarantees that after overlap-add, the original signal is recovered exactly if the spectrum is unmodified.
+
+**Implementation note:** Precompute `w_synth[n]` at initialization. Do not compute it in the audio thread.
+
+---
+
+## 3. The Core Extraction Step (Wiener Filter)
+
+For each STFT bin `k` (0 ≤ k < N/2+1), given complex spectra `A[k]` and `B[k]`:
+
+### 3.1 The Math
+
+```
+h[k] = (A[k] · conj(B[k])) / (|B[k]|² + ε)
+
+C_A[k] = h[k] · B[k]
+C_B[k] = conj(h[k]) · A[k]
+
+C[k]   = (C_A[k] + C_B[k]) / 2
+Res_A[k] = A[k] – C[k]
+Res_B[k] = B[k] – C[k]
+```
+
+### 3.2 Epsilon (Regularization)
+
+Use a **relative epsilon** to prevent division-by-zero while preserving the filter's behavior across dynamic ranges:
+
+```
+ε = 1e-6 · |B[k]|²
+```
+
+If `|B[k]|²` is extremely small (e.g., hard-panned source), `ε` dominates and `h[k] → 0`, correctly yielding `C[k] ≈ 0`.
+
+**Alternative (simpler):** Fixed `ε = 1e-12` for float32, `1e-15` for float64. Both work; the relative version is safer for real-world audio.
+
+### 3.3 Why This Works (Proof of Properties)
+
+**Lossless reconstruction (algebraic guarantee):**
+```
+2·C + Res_A + Res_B
+= 2·C + (A – C) + (B – C)
+= A + B
+```
+This is exact regardless of the value of `h` or `ε`. It is impossible to break.
+
+**True separation:**
+By definition, `Res_A = A – C`. The center component `C` has been fully subtracted from `A`. If you invert `C` and add it to `A`, you get `A – C = Res_A`. There is no "leakage" because subtraction is exact.
+
+**Mono source (A = B):**
+```
+h = |A|² / (|A|² + ε) ≈ 1
+C = (1·A + 1·A)/2 = A
+Res_A = A – A = 0,  Res_B = 0
+```
+Mono energy goes 100% to Center.
+
+**Hard-panned left (B = 0):**
+```
+h = 0,  C = 0,  Res_A = A,  Res_B = 0
+```
+Energy stays 100% in the left residual.
+
+**Panned source (e.g., A = 0.866·S, B = 0.5·S):**
+```
+C ≈ 1.183·S,  Res_A ≈ –0.317·S,  Res_B ≈ –0.683·S
+```
+The "negative" residuals are simply phase-inverted, attenuated copies of the source. Phase inversion is inaudible in a single channel. When all channels are summed with the correct reconstruction weights, they cancel perfectly and recover the original stereo.
+
+---
+
+## 4. Single-Layer Plugin (3.1 Mode) — First Milestone
+
+This is your "phantom center VST replica." It implements exactly one extraction pass.
+
+### 4.1 Signal Flow
+
 ```
 Stereo Input (L, R)
-    ↓
-[LFE Extraction] — LP80((L+R)/2) → LFE channel (bypasses spatial routing)
-    ↓
-[STFT] — 512-sample Hann window, 50% overlap
-    ↓
-Per-bin analysis (ILD, correlation, phase difference, spectral flux)
-    ↓
-Object grouping (adaptive thresholds)
-    ↓
-Post-grouping harmonic merge
-    ↓
-Height decision (post-grouping, with transient boost)
-    ↓
-Stretched azimuth estimation (ILD → stretched angle)
-    ↓
-Tent-map panning per object
-    ↓
-Front phantom center blend (optional, see Section 9)
-    ↓
-Temporal smoothing (birth/death ramps + gain smoothing)
-    ↓
-[iSTFT per channel]
-    ↓
-Multichannel Output (ground + height + LFE)
+    │
+    ├──→ [STFT] ──→ L_fft, R_fft
+    │                  │
+    │                  ▼
+    │           WienerExtract(L_fft, R_fft)
+    │                  │
+    │        ┌────────┼────────┐
+    │        ▼        ▼        ▼
+    │      C_fft   Lres_fft  Rres_fft
+    │        │        │        │
+    │        ▼        ▼        ▼
+    │     [iSTFT]  [iSTFT]  [iSTFT]
+    │        │        │        │
+    │        ▼        ▼        ▼
+    │      C_out   L_out    R_out
+    │
+    └──→ [LFE Filter] ──→ LFE_out
 ```
 
----
+### 4.2 Per-Frame Processing
 
-## 4. STFT Front End
-- **Window:** 512-sample Hann, 50% overlap
-- **Sample rates:** 44.1 / 48 / 96 kHz (auto-scaled)
-- **Latency:** 10.7 ms (full window buffer at 48 kHz; causal implementation requires complete 512-sample frame before processing)
+For each audio block:
+1. **Buffer:** Write incoming samples into a circular buffer. When `N` new samples + `N/2` overlap are available, extract one frame.
+2. **STFT:** Window the frame with `w[n]`, FFT to get `L_fft[k]`, `R_fft[k]`.
+3. **Extract:** Apply the Wiener formula (§3.1) with `A = L_fft`, `B = R_fft`.
+   - `C_fft[k] = C[k]`
+   - `Lres_fft[k] = Res_A[k]`
+   - `Rres_fft[k] = Res_B[k]`
+4. **iSTFT:** For each output channel, inverse-FFT, window with `w_synth[n]`, overlap-add into the output circular buffer.
+5. **LFE:** In the time domain, `LFE = LP80((L+R)/2)`. Mix additively after iSTFT.
 
----
+### 4.3 LFE Filter
 
-## 5. Per-Bin Analysis
-For each bin `k`:
-- `ILD[k] = 20·log₁₀(|L[k]| / |R[k]|)`
-- `Correlation[k] = |L[k]·R[k]*| / (|L[k]|·|R[k]|)`
-- `PhaseDiff[k] = unwrap(arg(L[k]) − arg(R[k]))`
-- `SpectralFlux[k] = |Magnitude[k] − MagnitudePrev[k]|`
-
----
-
-## 6. Object Grouping
-
-**Initial scan** (low-to-high frequency):
-```
-start_idx = 0
-for k = 1 to N/2:
-    ild_diff = |ILD[k] − ILD[k−1]|
-    corr_diff = |Correlation[k] − Correlation[k−1]|
-    
-    if Correlation[k−1] > 0.9:   ild_thresh = 4.0 dB
-    elif Correlation[k−1] < 0.5: ild_thresh = 1.0 dB
-    else:                         ild_thresh = 2.5 dB
-    
-    corr_thresh = 0.2
-    
-    if (ild_diff < ild_thresh) AND (corr_diff < corr_thresh):
-        continue  // same object
-    else:
-        finalize object at k−1
-        start_idx = k
-```
-
-**Post-grouping harmonic merge:**
-```
-for each pair of adjacent objects (A, B):
-    ratio = B.spectralCentroid / A.spectralCentroid
-    if (|ratio − round(ratio)| < 0.15) AND (A.meanCorr > 0.8) AND (B.meanCorr > 0.8):
-        merge B into A
-```
-
-**Note:** Non-harmonic dense textures (detuned synths, orchestral clusters, thick pad layers) may still fragment despite harmonic merge. The 64-slot object pool limits the damage by capping the number of active objects.
+- **Type:** 4th-order Butterworth low-pass
+- **Cutoff:** 80 Hz (configurable 40–200 Hz)
+- **Implementation:** Bilinear transform from analog prototype. Two cascaded 2-pole sections (Direct Form I or II).
+- **Extracted before STFT**, mixed additively after iSTFT.
 
 ---
 
-## 7. Height Decision (Post-Grouping)
+## 5. Artifact Mitigation (Watery Sound)
 
-For each object:
-```
-energyAbove = sumEnergy(object, freq > heightThreshold)
-transientEnergy = sumSpectralFlux(object)
-effectiveAbove = energyAbove + (transientEnergy * transientBoost * 0.5)
+Individual channels will sound "watery" or thin in isolation — this is inherent to any STFT-based extraction because adjacent bins are modified independently. **However, when all channels are summed, the artifacts cancel exactly because the process is linear and lossless.**
 
-if (Height Split == ON) AND (0.25 < effectiveAbove/totalEnergy < 0.75):
-    // Object is genuinely split across the spectral boundary
-    // Split into two objects at heightThreshold frequency
-    // Route low portion to ground, high portion to height
-    // Both portions use the same stretched azimuth
-else:
-    if (effectiveAbove / totalEnergy) > 0.5:
-        targetLayer = HEIGHT
-        route entire object to height speaker at object's stretched azimuth
-        remove from ground (subtractive)
-    else:
-        targetLayer = GROUND
-        route entire object to ground via tent-map
-```
+To minimize the watery artifact in isolation (for solo channel monitoring):
 
-**Height speakers (all at +30° elevation):**
-- Ltf (−30°), Rtf (+30°), Ctr (0°), Ltr (−150°), Rtr (+150°)
-
-**Format channel counts:**
-- **7.1.4:** Ltf, Rtf, Ltr, Rtr (4 height speakers)
-- **9.1.4:** Ltf, Rtf, Ctr, Ltr, Rtr (5 height speakers)
-
-**Note:** The height layer is purely spectral. Bright snare transients, high-frequency synth leads, or other non-overhead content above the threshold will route to height. This is a known creative effect, not a spatial extraction.
-
----
-
-## 8. Stretched Azimuth Estimation
-
-The original stereo field spans ±30°. This is stretched to a full 360° ring via a smooth monotonic curve calibrated to the following anchor points:
-
-| |ILD| (dB) | Stretched Angle (°) |
-|--------|---------------------|
-| 0 | 0 |
-| 3 | 30 |
-| 8 | 90 |
-| 15 | 150 |
-| 30 | 180 |
-
-**Implementation:** A 5-point cubic spline with continuous first and second derivatives (C2), or an equivalent smooth parametric function that passes through all anchor points. The curve must be monotonic and saturate at 180°.
-
-**Stretch parameter:** User-adjustable 0.0–1.0 (default 1.0). At 0.0, `stretchedAngle = originalAngle` (±30° stereo field, no stretch). At 1.0, full curve. Intermediate values linearly interpolate between original and full stretch:
+### 5.1 Temporal Smoothing (Recommended)
+Apply a first-order IIR filter to the complex filter coefficient `h[k]` across consecutive frames:
 
 ```
-finalAngle = (1 - stretch) * originalAngle + stretch * stretchedAngle
+h_smooth[k, t] = α · h[k, t] + (1 – α) · h_smooth[k, t–1]
 ```
 
-where `originalAngle = sign(ILD) * min(30, abs(ILD) * 10)`.
+- `α = 0.3` is a good starting point (range: 0.1 to 0.5).
+- This reduces rapid frame-to-frame fluctuations, which are the primary cause of the "swimming" artifact.
+- **Preserve the phase:** Smooth the complex `h` directly, not just its magnitude.
 
-**Rear bias:** If `|PhaseDiff − 180°| < 30°` AND `|ILD| < 6 dB` AND `Correlation < 0.5`:
-`finalAngle += sign(ILD) · rearBias · 60°`
-
----
-
-## 9. Tent-Map Panning Law
-
-**7.1 ground speakers:** Lb(−150°), Ls(−90°), L(−30°), C(0°), R(+30°), Rs(+90°), Rb(+150°)  
-**9.1 adds:** Lw(−60°), Rw(+60°)
+### 5.2 Frequency Smoothing (Optional)
+Apply a 3-bin moving average to the magnitude of `h`:
 
 ```
-Given object finalAngle θ:
-1. Find nearest speakers (spkA at θA, spkB at θB)
-2. frac = (θ − θA) / (θB − θA)
-
-if frac < soloZone (default 0.05):
-    gain[spkA] = 1.0
-elif frac > (1 − soloZone):
-    gain[spkB] = 1.0
-else:
-    gain[spkA] = 1 − frac
-    gain[spkB] = frac
+|h_smooth|[k] = (|h|[k–1] + 2·|h|[k] + |h|[k+1]) / 4
 ```
 
-**Cosine rolloff at solo-zone edges:** To eliminate mathematical discontinuities, the gain at the boundary uses a smooth cosine transition:
+Then reconstruct: `h_smooth[k] = |h_smooth|[k] · exp(j · arg(h[k]))`.
+
+This prevents spectral discontinuities between adjacent bins.
+
+### 5.3 Why Artifacts Cancel on Summation
+The extraction is a **linear time-varying filter**. Any artifact introduced into `C` is also introduced into `Res_A` and `Res_B` with opposite phase. When you sum `2·C + Res_A + Res_B`, the artifacts sum to zero, leaving only the original signal.
+
+---
+
+## 6. Full Cascade (5.1 / 7.1 / 9.1)
+
+For the full Spatial Expander, the single extraction is cascaded. All extractions happen **inside the same STFT frame** — no additional latency.
+
+### 6.1 Internal Signal Definitions
 
 ```
-if frac < soloZone:
-    gain[spkA] = 0.5 + 0.5 * cos(π * frac / soloZone)
-    gain[spkB] = 1.0 - gain[spkA]
-elif frac > (1 - soloZone):
-    gain[spkB] = 0.5 + 0.5 * cos(π * (1.0 - frac) / soloZone)
-    gain[spkA] = 1.0 - gain[spkB]
+Layer 1:
+  C1      = WienerCenter(L, R)
+  SideL   = L – C1
+  SideR   = R – C1
+
+Layer 2 (Left):
+  FrontL  = WienerCenter(SideL, C1)
+  RearL   = SideL – FrontL
+
+Layer 2 (Right):
+  FrontR  = WienerCenter(SideR, C1)
+  RearR   = SideR – FrontR
+
+Layer 3 (Left):
+  SideL2  = WienerCenter(FrontL, RearL)
+  FrontL2 = FrontL – SideL2
+  RearL2  = RearL – SideL2
+
+Layer 3 (Right):
+  SideR2  = WienerCenter(FrontR, RearR)
+  FrontR2 = FrontR – SideR2
+  RearR2  = RearR – SideR2
+
+Layer 4 (Left):
+  WideL   = WienerCenter(FrontL, SideL2)   ← Uses original FrontL, not FrontL2
+  FrontL3 = FrontL – WideL
+  SideL3  = SideL2 – WideL
+
+Layer 4 (Right):
+  WideR   = WienerCenter(FrontR, SideR2)
+  FrontR3 = FrontR – WideR
+  SideR3  = SideR2 – WideR
 ```
 
-**Optional micro-bleed:** For additional smoothness on slow pans, a constant −20 dB bleed to the next-nearest speaker can be added. This is not implemented by default but can be exposed as a "Smoothness" parameter if user testing reveals stepping artifacts.
+### 6.2 Output Channel Mapping
+
+| Layout | Output Channels |
+|--------|-----------------|
+| **3.1** | `C1`, `SideL`, `SideR` |
+| **5.1** | `C1`, `FrontL`, `FrontR`, `RearL`, `RearR` |
+| **7.1** | `C1`, `FrontL2`, `FrontR2`, `SideL2`, `SideR2`, `RearL2`, `RearR2` |
+| **9.1** | `C1`, `FrontL3`, `FrontR3`, `WideL`, `WideR`, `SideL3`, `SideR3`, `RearL2`, `RearR2` |
+
+### 6.3 Phase Cancellation Policy
+
+- **7.1 and 9.1:** Full phase cancellation. After extracting `SideL2` from `(FrontL, RearL)`, the output residuals `FrontL2` and `RearL2` have `SideL2` fully subtracted. Same for all layers.
+- **5.1:** The user may optionally skip phase cancellation on the rear channels for better side phantom imaging. For the plugin, implement full cancellation consistently; the user can adjust via calibration gains if needed.
+
+### 6.4 Lossless Reconstruction Weights
+
+To recover the original stereo exactly, sum the output channels with these weights:
+
+| Layout | Channels at 2× | Channels at 1× |
+|--------|---------------|----------------|
+| **3.1** | `C1` | `SideL`, `SideR` |
+| **5.1** | `C1` | `FrontL`, `FrontR`, `RearL`, `RearR` |
+| **7.1** | `C1`, `SideL2`, `SideR2` | `FrontL2`, `FrontR2`, `RearL2`, `RearR2` |
+| **9.1** | `C1`, `WideL`, `WideR` | `FrontL3`, `FrontR3`, `SideL3`, `SideR3`, `RearL2`, `RearR2` |
+
+**Verification:**  
+`Σ (weight · channel) = L + R` exactly.
 
 ---
 
-## 10. Front Phantom Center
+## 7. Auto-Calibration (for Full Plugin)
 
-**Parameter:** `Front Phantom Center` — checkbox, default **unchecked**.
+### 7.1 Purpose
+Extracted intermediate channels (Side, Wide) are perceptually quieter than expected. Auto-calibration ensures a mono source maintains constant loudness (±0.5 dB) as it pans through the layers.
 
-**Behavior:**
-- **Unchecked (default):** Center objects route to **C only** (solo). The tent-map handles center objects normally.
-- **Checked:** When an object routes to C, a portion of its energy is blended to **L and R** to create a phantom center image across the front three speakers.
+### 7.2 Procedure
+1. **Generate** stereo pink noise internally (not routed to output).
+2. **Sweep** pan from hard-left to hard-right in 1 dB ILD steps.
+3. **Measure** total energy across all output channels at each step.
+4. **Compute** per-channel gain corrections so total energy varies < ±0.5 dB.
+5. **Store** gains in a lookup table indexed by ILD region.
 
-**Implementation:**
-```
-if (FrontPhantomCenter == ON) AND (centerGain > 0):
-    phantomWidth = 0.25
-    gain[C] = centerGain * (1.0 - phantomWidth)
-    gain[L] += centerGain * phantomWidth * 0.5
-    gain[R] += centerGain * phantomWidth * 0.5
-    // Total energy preserved: 0.75 + 0.125 + 0.125 = 1.0
-```
+### 7.3 Playback Safety
+- If calibration triggers during DAW playback, **mute all output** until complete.
+- Use a **10 ms fade in/out** to prevent clicks.
 
----
-
-## 11. Temporal Continuity
-
-**Frame-to-frame object tracking:** Match objects using ILD difference (40%), spectral centroid difference (35%), bandwidth difference (25%). Inherit persistent ID if match score < threshold; otherwise assign new ID.
-
-**Fixed-size object pool:** 64 slots maximum. New objects fill the first dead slot. If all slots are full, the weakest object is overwritten. This is lock-free and allocation-free.
-
-**Gain smoothing:** `smoothedGain[n] = α · targetGain[n] + (1−α) · smoothedGain[n−1]` where `α = 1 − exp(−1 / (τ · fs))`, τ = 20–50 ms (default 30 ms).
-
-**Hysteresis:** Once assigned to a speaker, require 2× stronger ILD shift to change assignment.
-
-**Birth/death ramping:**
-```
-if object.isNew:
-    ramp = min(1.0, timeSinceBirth / 20ms)
-    smoothedGain = targetGain * ramp
-elif object.isDying:
-    ramp = max(0.0, 1.0 − timeSinceDeath / 20ms)
-    smoothedGain = previousGain * ramp
-```
+### 7.4 User Trim
+After auto-calibration, apply a per-channel trim: **±12 dB** offset.
 
 ---
 
-## 12. LFE Channel
-Extracted **before** STFT from original time-domain input: `LFE = LP80((L+R)/2)`. Mixed additively with ground channels after iSTFT.
+## 8. Implementation Notes for the Developer
 
-**Implementation note:** Ensure the LFE lowpass filter has the same group delay as the STFT analysis path, or compensate for the difference in the output stage to prevent low-frequency smearing relative to the spatialized content.
+### 8.1 Real-Time Safety
+- **No allocations** in the audio thread. Pre-allocate all FFT buffers, circular buffers, and gain tables at initialization.
+- Use **lock-free atomic updates** for parameter changes (window size, layer count).
+- If the user changes window size or layer count, trigger a new calibration on the next buffer cycle (with mute).
 
----
+### 8.2 Memory Layout (Per Channel)
+- **Input circular buffer:** `2 × N` samples (double-buffered for overlap)
+- **FFT complex buffer:** `N` complex values (interleaved or planar)
+- **Output circular buffer:** `2 × N` samples per output channel
 
-## 13. Latency Budget
+For the first milestone (3.1 + LFE): 4 output channels = 4 × `2N` samples.
 
-| Stage | Latency |
-|-------|---------|
-| STFT window (causal, 512 samples at 48 kHz) | 10.7 ms |
-| **Total** | **10.7 ms** |
+### 8.3 FFT Library
+- **Windows:** Intel IPP / FFTW
+- **macOS:** Apple vDSP (highly optimized)
+- **Linux:** FFTW or PFFFT
 
----
+Use real-to-complex FFT (r2c) and complex-to-real (c2r). Only process bins `0` to `N/2` (the rest are conjugate-symmetric for real inputs).
 
-## 14. Channel Mapping Table
+### 8.4 CPU Optimization
+- The per-bin Wiener math is trivial (`O(N)`). The FFT dominates.
+- For the full cascade (9.1), you perform multiple extractions per bin but still only **2 FFTs and 9 iFFTs** per frame. The extractions are just complex multiplies/adds — easily vectorized with SSE/AVX/NEON.
 
-| Output Format | Ground Channels | Height Channels | Total |
-|---------------|-----------------|-----------------|-------|
-| **7.1** | Lb, Ls, L, C, R, Rs, Rb | — | 7 |
-| **9.1** | Lb, Ls, Lw, L, C, R, Rw, Rs, Rb | — | 9 |
-| **7.1.4** | Lb, Ls, L, C, R, Rs, Rb | Ltf, Rtf, Ltr, Rtr | 11 |
-| **9.1.4** | Lb, Ls, Lw, L, C, R, Rw, Rs, Rb | Ltf, Rtf, Ctr, Ltr, Rtr | 14 |
-
-**Speaker angles:**
-- Ground: Lb(−150°), Ls(−90°), Lw(−60°), L(−30°), C(0°), R(+30°), Rw(+60°), Rs(+90°), Rb(+150°)
-- Height: Ltf(−30°), Rtf(+30°), Ctr(0°), Ltr(−150°), Rtr(+150°) — all at +30° elevation
-
----
-
-## 15. User Parameters
-
-| Parameter | Range | Default |
-|-----------|-------|---------|
-| Window Size | 256 / 512 / 1024 | 512 |
-| Stretch | 0.0 – 1.0 | 1.0 |
-| Solo Zone | 0% – 15% | 5% |
-| Front Phantom Center | Off / On | Off |
-| Height Threshold | 2 – 12 kHz | 6 kHz |
-| Height Split | Off / On | Off |
-| Height Amount | −∞ to +12 dB | 0 dB |
-| Transient Boost | 0% – 100% | 40% |
-| Rear Bias | 0% – 100% | 15% |
-| Smoothing Time | 10 – 100 ms | 30 ms |
-| LFE Cutoff | 40 – 200 Hz | 80 Hz |
-| LFE Level | −∞ to +12 dB | 0 dB |
-| Output Format | 7.1 / 9.1 / 7.1.4 / 9.1.4 | 7.1.4 |
+### 8.5 Numerical Precision
+- Use **float32** for the audio path. It is sufficient.
+- Use **float64** for the calibration energy accumulation to prevent drift.
 
 ---
 
-## 16. Acceptance Criteria
+## 9. Validation Tests
 
-**Functional**
-- Mono source (L = R) → **only Center** (or L/C/R phantom if Front Phantom Center is ON).
-- Hard-panned left (ILD > +15 dB) → **only Rear Left (Lb)**.
-- Moderately left (ILD ~ +8 dB) → **only Side Left (Ls)**.
-- Slightly left (ILD ~ +3 dB) → **only Front Left (L)**.
-- Between adjacent speakers → **only those two adjacent speakers** fire with smooth phantom image.
-- Stretch = 0.0 → output identical to original stereo mapping (L/R only, no rear/side).
-- High-frequency object above threshold → routed to **height** at same stretched azimuth, ground spectrally reduced.
-- Latency ≤ 10.7 ms at 48 kHz with 512-sample window.
+Your developer should verify these before declaring the milestone complete:
 
-**Perceptual**
-- Discrete sources maintain timbral coherence — no comb filtering or phasiness.
-- Spatial image does not flicker near speaker boundaries.
-- Height channels sound spectrally distinct from ground.
-- No vertical phantom images between ground and height.
-
-**Technical**
-- Real-time safe (no allocations in audio thread).
-- Supports standard DAW surround/Atmos channel routing.
+| Test | Input | Expected Result |
+|------|-------|-----------------|
+| **Mono Sine** | `L = R = 1kHz sine` | Center contains full sine. `Lᵣₑₛ` and `Rᵣₑₛ` are silent (–inf dB relative to input). |
+| **Hard-Left** | `L = sine, R = 0` | Center is silent. `Lᵣₑₛ` contains full sine. `Rᵣₑₛ` is silent. |
+| **Reconstruction** | Any stereo signal | `2·C + Lᵣₑₛ + Rᵣₑₛ` equals `L + R` sample-exact (within float32 precision). |
+| **Null Test** | `L = R = pink noise` | Invert `C`, mix with `L` → result is identical to `Lᵣₑₛ` (nulls to –120 dB). |
+| **Watery Check** | Solo `C` or `Lᵣₑₛ` | Sounds thin/watery in isolation. Sum all channels → sounds identical to original input. |
 
 ---
 
-## 17. Known Limitations
+## 10. Parameter Summary (First Milestone)
 
-- Two sources panned close together may be fused into one object and routed to a compromised position.
-- Single sources with strong room reflections may fragment if harmonicity override fails.
-- Non-harmonic dense textures (orchestral clusters, detuned pads) may fragment into multiple micro-objects, creating a grainy spatial texture.
-- Height layer is a creative psychoacoustic effect, not spatial extraction. Bright non-overhead content (snare transients, synth leads) above the threshold will route to height.
-- Stereo recordings contain no true height information.
-- Uncorrelated content (rain, crowd, dense reverb) may produce a grainy spatial texture due to rapid object fragmentation. This is an intentional trade-off to preserve the original stereo field's spatial relationships rather than collapsing them into a uniform surround bed.
-
----
-
-## 18. Implementation Notes
-
-**iSTFT optimization:** Running separate inverse transforms for 11–14 channels is computationally expensive. Where possible, share the inverse FFT computation and apply per-channel gains in the time domain, or use a single inverse transform into a multichannel buffer with per-channel overlap-add.
-
-**LFE delay alignment:** The LFE extraction path must have matched group delay with the STFT path. If using a causal IIR lowpass for LFE, compensate for its delay in the output mixer or use a linear-phase FIR with delay equal to the STFT window.
+| Parameter | Range | Default | Notes |
+|-----------|-------|---------|-------|
+| **Window Size** | 512 / 1024 / 2048 | 1024 | Determines latency |
+| **LFE Cutoff** | 40 – 200 Hz | 80 Hz | Butterworth LP |
+| **LFE Level** | –∞ to +12 dB | 0 dB | Additive mix |
+| **Temporal Smooth** | 0.0 – 1.0 | 0.3 | `α` for IIR smoothing of `h` |
+| **Channel Trim** (per channel) | –12 to +12 dB | 0 dB | Applied after extraction |
 
 ---
 
-## 19. Deliverables
-1. VST3 / AU / AAX plugin for Windows/macOS
-2. Standalone test application
-3. Preset bank: Default, Discrete, Ambient, Live Low-Latency
-4. User manual
+## 11. What to Build First
+
+**Milestone 1: The 3.1 Phantom Center**
+1. Implement STFT/iSTFT with Hann window and dual synthesis window.
+2. Implement the Wiener extraction core (§3.1).
+3. Output `C`, `Lᵣₑₛ`, `Rᵣₑₛ`.
+4. Add LFE (LP80).
+5. Run the validation tests (§9).
+6. Verify lossless reconstruction with the null test.
+
+Once this works perfectly, the full cascade is just **calling the same extraction function multiple times per bin** with the DAG structure defined in §6.1. No new math is needed.
 
 ---
 
-Roadmap:
-
-## Phase 1: Real-Time Foundation & STFT Core
-**Duration:** Weeks 1–3  
-**Goal:** A silent, bit-transparent multichannel pass-through with deterministic latency.
-
-| Component | Priority | Rationale |
-|-----------|----------|-----------|
-| **Lock-free audio thread architecture** | **P0** | The spec mandates "no allocations in audio thread." Establish the memory pool, ring buffer, and command queue before writing any DSP. |
-| **STFT analysis (512 Hann, 50% overlap)** | **P0** | Entire signal flow depends on this. Must support 44.1/48/96 kHz auto-scaling. |
-| **iSTFT synthesis (per-channel)** | **P0** | Start with naive per-channel overlap-add. Correctness before speed. |
-| **LFE extraction (LP80, time-domain)** | **P0** | Must be in place before spatial routing. Delay-alignment with STFT path is mandatory to prevent LF smearing. |
-| **Latency validation** | **P0** | Confirm ≤10.7 ms at 48 kHz. This is a hard acceptance gate. |
-| **Plugin shell (VST3 + AU)** | **P1** | Needed for testing, but can be a minimal wrapper around the DSP engine. |
-
-**Milestone 1:** Stereo in → 7.1 bit-transparent pass-through with LFE channel active and latency verified.
-
----
-
-## Phase 2: Spatial Analysis Engine
-**Duration:** Weeks 3–5  
-**Goal:** Stable object detection from stereo STFT frames.
-
-| Component | Priority | Rationale |
-|-----------|----------|-----------|
-| **Per-bin analysis (ILD, Correlation, PhaseDiff, SpectralFlux)** | **P0** | Raw material for all downstream decisions. |
-| **Object grouping (adaptive thresholds)** | **P0** | The core of the "Object-Grouping STFT" architecture. Without this, there is no spatial routing. |
-| **64-slot fixed object pool** | **P0** | Required for real-time safety. Lock-free, allocation-free, overwrite-weakest policy. |
-| **Gain smoothing + birth/death ramps (20 ms)** | **P0** | Prevents clicking and zipper noise. Must exist before any panning is audible. |
-| **Frame-to-frame object tracking** | **P1** | Critical for perceptual acceptance ("no flicker"). Uses ILD/spectral-centroid/bandwidth matching. |
-| **Hysteresis (2× ILD shift)** | **P1** | Prevents rapid speaker boundary flickering. |
-| **Harmonic merge** | **P1** | Reduces fragmentation on harmonic sources. Important for timbral coherence acceptance criteria. |
-
-**Milestone 2:** Stereo input produces a stable, smooth-moving set of objects with continuous gains. No output routing yet—validate object consistency visually/debug-log first.
-
----
-
-## Phase 3: Spatial Rendering Core
-**Duration:** Weeks 5–7  
-**Goal:** Correct speaker routing for 7.1 ground plane.
-
-| Component | Priority | Rationale |
-|-----------|----------|-----------|
-| **Stretched azimuth spline (5-point C2, monotonic)** | **P0** | The geometric rescaling engine. Must hit all anchor points (0→0°, 3→30°, 8→90°, 15→150°, 30→180°). |
-| **Stretch parameter (0.0–1.0)** | **P0** | At 0.0, output must collapse to L/R only (acceptance criteria). |
-| **Tent-map panning law (7.1 ground)** | **P0** | Lb, Ls, L, C, R, Rs, Rb routing. Must support solo-zone logic. |
-| **Height decision (basic ground/height routing)** | **P1** | Route entire object to height or ground based on spectral energy ratio. |
-| **Rear bias detection** | **P1** | Improves spatial accuracy for out-of-phase content (e.g., hard-panned sources with phase inversion). |
-| **Cosine rolloff at solo-zone edges** | **P1** | Eliminates mathematical discontinuities in the tent-map. Audible artifact if skipped. |
-
-**Milestone 3:** All mono/stereo acceptance criteria pass for 7.1 ground:
-- Mono → C only
-- Hard left → Lb only
-- Moderate left → Ls only
-- Slight left → L only
-- Between speakers → smooth phantom image on adjacent pair only
-
----
-
-## Phase 4: Format Expansion & Parameters
-**Duration:** Weeks 7–9  
-**Goal:** Full format support and parameter wiring.
-
-| Component | Priority | Rationale |
-|-----------|----------|-----------|
-| **7.1.4 height speaker routing** | **P1** | Default output format per spec. Height speakers at +30° elevation (Ltf, Rtf, Ltr, Rtr). |
-| **9.1 ground expansion (Lw, Rw)** | **P1** | Adds −60°/+60° speakers. |
-| **9.1.4 format** | **P1** | Adds Ctr height speaker. |
-| **Front Phantom Center** | **P2** | Optional feature (default off). Blends C to L/R. |
-| **Height Split** | **P2** | Splits objects across height threshold. Complex; basic height routing (P1) is sufficient for MVP. |
-| **Full parameter system** | **P1** | All 13 parameters from Section 15 must be wired and automatable. |
-| **LFE delay compensation** | **P0** | If LFE path group delay ≠ STFT path, compensate in output mixer. |
-
-**Milestone 4:** Plugin runs in 7.1.4, 9.1, and 9.1.4 configurations. All parameters functional.
-
----
-
-## Phase 5: Polish, Optimization & Validation
-**Duration:** Weeks 9–12  
-**Goal:** Perceptual acceptance and deliverable quality.
-
-| Component | Priority | Rationale |
-|-----------|----------|-----------|
-| **iSTFT optimization (shared FFT)** | **P2** | Spec explicitly notes this is expensive. Share inverse FFT and apply gains in time domain. |
-| **Micro-bleed option** | **P3** | Spec says "not implemented by default." Expose as "Smoothness" only if stepping artifacts appear in user testing. |
-| **Preset bank (4 presets)** | **P2** | Default, Discrete, Ambient, Live Low-Latency. |
-| **Standalone test app** | **P2** | Useful for QA and acceptance testing without DAW overhead. |
-| **AAX wrapper** | **P3** | Pro Tools compatibility. Standard SDK work, but lowest priority among formats. |
-| **Perceptual validation suite** | **P1** | Discrete sources, dense textures, transients, uncorrelated content. Verify no comb filtering, no vertical phantoms, distinct height spectral character. |
-| **User manual** | **P3** | Final deliverable. |
-
-**Milestone 5:** Release candidate. All acceptance criteria (functional, perceptual, technical) pass.
-
----
-
-## Master Priority Reference
-
-| # | Feature | Priority | Blocking Acceptance Criteria |
-|---|---------|----------|------------------------------|
-| 1 | Lock-free RT architecture | **P0** | Technical |
-| 2 | STFT / iSTFT core | **P0** | Functional + Latency |
-| 3 | LFE extraction + delay align | **P0** | Functional |
-| 4 | Per-bin analysis | **P0** | Functional |
-| 5 | Object grouping | **P0** | Functional |
-| 6 | 64-slot object pool | **P0** | Technical |
-| 7 | Gain smoothing / ramps | **P0** | Perceptual |
-| 8 | Azimuth spline + Stretch param | **P0** | Functional |
-| 9 | Tent-map panning (7.1) | **P0** | Functional |
-| 10 | Latency ≤ 10.7 ms | **P0** | Functional |
-| 11 | Object tracking | **P1** | Perceptual |
-| 12 | Hysteresis | **P1** | Perceptual |
-| 13 | Harmonic merge | **P1** | Perceptual |
-| 14 | Height routing (basic) | **P1** | Functional |
-| 15 | Rear bias | **P1** | Functional |
-| 16 | Cosine rolloff | **P1** | Perceptual |
-| 17 | 7.1.4 / 9.1 / 9.1.4 formats | **P1** | Functional |
-| 18 | Full parameter wiring | **P1** | Functional |
-| 19 | Front Phantom Center | **P2** | — |
-| 20 | Height Split | **P2** | — |
-| 21 | iSTFT shared-FFT optimization | **P2** | Technical |
-| 22 | Preset system | **P2** | Deliverable |
-| 23 | Standalone app | **P2** | Deliverable |
-| 24 | AAX wrapper | **P3** | Deliverable |
-| 25 | Micro-bleed / Smoothness | **P3** | — |
-| 26 | User manual | **P3** | Deliverable |
-
----
-
-## Critical Path & Risk Notes
-
-1. **Object Grouping is the bottleneck.** If the adaptive thresholds in Section 6 fragment too aggressively on dense orchestral pads or detuned synths, the spatial image becomes "grainy." Budget time for threshold tuning.
-2. **LFE alignment is subtle.** If you use a causal IIR for the LP80, measure its group delay precisely and delay-compensate the spatialized path. Do not guess.
-3. **Height is creative, not extractive.** Do not spend cycles trying to "improve" height extraction with HRTF or ambisonic tricks—the spec explicitly rejected ambisonics. Stick to the spectral threshold + transient boost model.
-4. **Stretch = 0.0 is a test mode.** Ensure the code path literally maps to L/R only with no rear/side energy. This is an acceptance gate that is easy to break accidentally when optimizing the panning law.
+**Key insight for your developer:** The entire plugin is just one STFT frame, one complex formula per bin, and a lot of careful buffer management. The "magic" is not in the code complexity — it's in the mathematical properties of the Wiener subtraction guaranteeing true separation and lossless reconstruction.

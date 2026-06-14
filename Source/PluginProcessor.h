@@ -1,7 +1,7 @@
 #pragma once
 #include <JuceHeader.h>
-#include "DSP/SpatialRenderer.h"
 #include "DSP/LFEExtractor.h"
+#include "DSP/StereoSTFT.h"
 
 class SpatialExpanderAudioProcessor : public juce::AudioProcessor
 {
@@ -32,12 +32,8 @@ public:
     void getStateInformation (juce::MemoryBlock& destData) override;
     void setStateInformation (const void* data, int sizeInBytes) override;
 
-    SpatialRenderer& getRenderer() { return renderer; }
-
 private:
-    SpatialRenderer renderer;
     LFEExtractor lfe;
-
     std::vector<float> lfeOutBuf;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (SpatialExpanderAudioProcessor)

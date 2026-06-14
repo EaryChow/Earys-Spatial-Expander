@@ -15,7 +15,6 @@ public:
 
 private:
     SpatialExpanderAudioProcessor& processor;
-
     juce::Label titleLabel;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (SpatialExpanderAudioProcessorEditor)
