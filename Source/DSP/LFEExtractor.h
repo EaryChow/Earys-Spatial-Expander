@@ -7,8 +7,9 @@ public:
     LFEExtractor() = default;
     ~LFEExtractor() = default;
 
-    void prepare (double sampleRate, int stftLatencySamples);
+    void prepare (double sampleRate, int stftLatencySamples, double cutoff = 80.0);
     void reset();
+    void setCutoff (double cutoff);
     void process (const float* inL, const float* inR,
                   float* outLFE, int numSamples);
 
@@ -26,6 +27,8 @@ private:
     std::vector<float> extraDelay;
     int extraPos = 0;
     int totalLatency = 0;
+
+    double sampleRate_ = 48000.0;
 
     static void designLowPass (std::vector<float>& coeffs, double sampleRate, double cutoff);
 

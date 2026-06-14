@@ -9,34 +9,42 @@ public:
 
     void prepare (double sampleRate);
     void reset();
+    void setWindowSize (int newFftOrder);
+
     void process (const float* inL, const float* inR,
-                  float* outL, float* outR, int numSamples);
+                  float* outC, float* outLres, float* outRres, int numSamples);
 
-    int getLatencySamples() const noexcept { return fftSize; }
+    int getLatencySamples() const noexcept { return hopSize; }
     double getLatencyMs() const noexcept;
+    int getNumBins() const noexcept { return fftSize / 2 + 1; }
 
-    static constexpr int fftOrder = 9;
-    static constexpr int fftSize  = 1 << fftOrder;
-    static constexpr int hopSize  = fftSize / 2;
+    int fftOrder = 9;
+    int fftSize  = 512;
+    int hopSize  = 256;
 
     class FrameListener
     {
     public:
         virtual ~FrameListener() = default;
-        virtual void onFrame (float* fftBufL, float* fftBufR, int fftSize) = 0;
+        virtual void onFrame (const float* fftL, const float* fftR,
+                              float* fftC, float* fftLres, float* fftRres,
+                              int fftSize) = 0;
     };
 
     void setFrameListener (FrameListener* listener) { frameListener = listener; }
 
 private:
     void processFrame();
+    void allocateBuffers();
 
-    juce::dsp::FFT fft;
+    std::unique_ptr<juce::dsp::FFT> fft;
 
     std::vector<float> window;
+    std::vector<float> synthWindow;
     std::vector<float> inBufL, inBufR;
-    std::vector<float> outBufL, outBufR;
+    std::vector<float> outBufC, outBufLres, outBufRres;
     std::vector<float> fftBufL, fftBufR;
+    std::vector<float> fftBufC, fftBufLres, fftBufRres;
 
     int inWp = 0;
     int64_t totalIn = 0;

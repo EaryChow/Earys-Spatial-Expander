@@ -28,11 +28,13 @@ void LFEExtractor::designLowPass (std::vector<float>& coeffs, double sampleRate,
         c *= invSum;
 }
 
-void LFEExtractor::prepare (double sampleRate, int stftLatencySamples)
+void LFEExtractor::prepare (double sampleRate, int stftLatencySamples, double cutoff)
 {
+    sampleRate_ = sampleRate;
+
     coeffs.assign (firNumTaps, 0.0f);
     firBuf.assign (firNumTaps, 0.0f);
-    designLowPass (coeffs, sampleRate, 80.0);
+    designLowPass (coeffs, sampleRate, cutoff);
 
     firPos = 0;
 
@@ -40,6 +42,11 @@ void LFEExtractor::prepare (double sampleRate, int stftLatencySamples)
     extraDelay.assign (static_cast<size_t> (extraSamples), 0.0f);
     extraPos = 0;
     totalLatency = stftLatencySamples;
+}
+
+void LFEExtractor::setCutoff (double cutoff)
+{
+    designLowPass (coeffs, sampleRate_, cutoff);
 }
 
 void LFEExtractor::reset()
