@@ -109,6 +109,7 @@ static void fillObjectMetrics (SpatialObject& obj, const std::vector<BinMetrics>
     float ildSum = 0.0f;
     float corrSum = 0.0f;
     float centroidSum = 0.0f;
+    float phaseDiffSum = 0.0f;
     float energy = 0.0f;
 
     for (int b = start; b <= end; ++b)
@@ -118,6 +119,7 @@ static void fillObjectMetrics (SpatialObject& obj, const std::vector<BinMetrics>
         ildSum += metrics[b].ild * mag;
         corrSum += metrics[b].correlation * mag;
         centroidSum += static_cast<float> (b) * mag;
+        phaseDiffSum += metrics[b].phaseDiff * mag;
         energy += mag * mag;
     }
 
@@ -131,6 +133,7 @@ static void fillObjectMetrics (SpatialObject& obj, const std::vector<BinMetrics>
     obj.meanILD = ildSum;
     obj.meanCorr = corrSum;
     obj.spectralCentroid = centroidSum;
+    obj.meanPhaseDiff = phaseDiffSum / (totalMag + 1e-10f);
     obj.totalEnergy = energy;
     obj.bandwidth = static_cast<float> (end - start);
 }

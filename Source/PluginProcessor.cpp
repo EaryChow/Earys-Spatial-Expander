@@ -26,24 +26,17 @@ bool SpatialExpanderAudioProcessor::isBusesLayoutSupported (const BusesLayout& l
 
 void SpatialExpanderAudioProcessor::prepareToPlay (double sampleRate, int samplesPerBlock)
 {
-    stft.prepare (sampleRate);
-    analyser.prepare (StereoSTFT::fftSize, sampleRate);
-    stft.setFrameListener (&analyser);
-
-    lfe.prepare (sampleRate, stft.getLatencySamples());
-    setLatencySamples (stft.getLatencySamples());
+    renderer.prepare (sampleRate);
+    lfe.prepare (sampleRate, renderer.getLatencySamples());
+    setLatencySamples (renderer.getLatencySamples());
 
     auto maxBlock = static_cast<size_t> (samplesPerBlock);
-    stftOutBufL.assign (maxBlock, 0.0f);
-    stftOutBufR.assign (maxBlock, 0.0f);
     lfeOutBuf.assign (maxBlock, 0.0f);
 }
 
 void SpatialExpanderAudioProcessor::releaseResources()
 {
-    stft.setFrameListener (nullptr);
-    stft.reset();
-    analyser.reset();
+    renderer.reset();
     lfe.reset();
 }
 
@@ -55,18 +48,28 @@ void SpatialExpanderAudioProcessor::processBlock (juce::AudioBuffer<float>& buff
 
     auto* inL = buffer.getReadPointer (0);
     auto* inR = buffer.getReadPointer (1);
-
     auto* const* channelData = buffer.getArrayOfWritePointers();
 
+    // Zero non-stereo channels (renderer writes L/R, LFE writes ch3)
     for (int ch = 2; ch < numOut; ++ch)
         juce::FloatVectorOperations::fill (channelData[ch], 0.0f, numSamples);
 
-    stft.process (inL, inR, stftOutBufL.data(), stftOutBufR.data(), numSamples);
+    // Route renderer ground channels to JUCE 7.1 bus positions:
+    //   Lb(6), Ls(4), L(0), C(2), R(1), Rs(5), Rb(7)
+    float* groundPtrs[SpatialRenderer::numGroundChannels];
+    groundPtrs[SpatialRenderer::Lb] = (numOut > 6) ? channelData[6] : channelData[0];
+    groundPtrs[SpatialRenderer::Ls] = (numOut > 4) ? channelData[4] : channelData[0];
+    groundPtrs[SpatialRenderer::L]  = channelData[0];
+    groundPtrs[SpatialRenderer::C]  = (numOut > 2) ? channelData[2] : channelData[0];
+    groundPtrs[SpatialRenderer::R]  = channelData[1];
+    groundPtrs[SpatialRenderer::Rs] = (numOut > 5) ? channelData[5] : channelData[1];
+    groundPtrs[SpatialRenderer::Rb] = (numOut > 7) ? channelData[7] : channelData[1];
+
+    renderer.process (inL, inR, groundPtrs, numSamples);
     lfe.process (inL, inR, lfeOutBuf.data(), numSamples);
 
-    if (numOut >= 1) juce::FloatVectorOperations::copy (channelData[0], stftOutBufL.data(), numSamples);
-    if (numOut >= 2) juce::FloatVectorOperations::copy (channelData[1], stftOutBufR.data(), numSamples);
-    if (numOut >= 4) juce::FloatVectorOperations::copy (channelData[3], lfeOutBuf.data(), numSamples);
+    if (numOut >= 4)
+        juce::FloatVectorOperations::copy (channelData[3], lfeOutBuf.data(), numSamples);
 }
 
 bool SpatialExpanderAudioProcessor::hasEditor() const

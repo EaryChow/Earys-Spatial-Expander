@@ -1,6 +1,5 @@
 #pragma once
 #include <JuceHeader.h>
-#include "StereoSTFT.h"
 
 struct BinMetrics
 {
@@ -20,6 +19,7 @@ struct SpatialObject
     float meanCorr;
     float spectralCentroid;
     float totalEnergy;
+    float meanPhaseDiff;
     float bandwidth;
 
     int id = -1;
@@ -30,14 +30,14 @@ struct SpatialObject
     bool claimed = false;
 };
 
-class SpatialAnalyser : public StereoSTFT::FrameListener
+class SpatialAnalyser
 {
 public:
     SpatialAnalyser() = default;
 
     void prepare (int fftSize, double sampleRate);
     void reset();
-    void onFrame (float* fftBufL, float* fftBufR, int fftSize) override;
+    void onFrame (float* fftBufL, float* fftBufR, int fftSize);
 
     const std::vector<BinMetrics>& getBinMetrics() const { return binMetrics; }
     const SpatialObject* getObjects() const { return objects; }
