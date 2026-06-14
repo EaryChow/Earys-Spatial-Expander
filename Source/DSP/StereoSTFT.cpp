@@ -106,6 +106,9 @@ void StereoSTFT::processFrame()
     fft.performRealOnlyForwardTransform (fftBufL.data());
     fft.performRealOnlyForwardTransform (fftBufR.data());
 
+    if (frameListener != nullptr)
+        frameListener->onFrame (fftBufL.data(), fftBufR.data(), fftSize);
+
     fft.performRealOnlyInverseTransform (fftBufL.data());
     fft.performRealOnlyInverseTransform (fftBufR.data());
 

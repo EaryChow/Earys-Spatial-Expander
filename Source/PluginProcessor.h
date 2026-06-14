@@ -2,6 +2,7 @@
 #include <JuceHeader.h>
 #include "DSP/StereoSTFT.h"
 #include "DSP/LFEExtractor.h"
+#include "DSP/SpatialAnalyser.h"
 
 class SpatialExpanderAudioProcessor : public juce::AudioProcessor
 {
@@ -36,6 +37,7 @@ public:
 private:
     StereoSTFT stft;
     LFEExtractor lfe;
+    SpatialAnalyser analyser;
 
     std::vector<float> stftOutBufL;
     std::vector<float> stftOutBufR;

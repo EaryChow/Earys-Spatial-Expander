@@ -27,6 +27,9 @@ bool SpatialExpanderAudioProcessor::isBusesLayoutSupported (const BusesLayout& l
 void SpatialExpanderAudioProcessor::prepareToPlay (double sampleRate, int samplesPerBlock)
 {
     stft.prepare (sampleRate);
+    analyser.prepare (StereoSTFT::fftSize, sampleRate);
+    stft.setFrameListener (&analyser);
+
     lfe.prepare (sampleRate, stft.getLatencySamples());
     setLatencySamples (stft.getLatencySamples());
 
@@ -38,7 +41,9 @@ void SpatialExpanderAudioProcessor::prepareToPlay (double sampleRate, int sample
 
 void SpatialExpanderAudioProcessor::releaseResources()
 {
+    stft.setFrameListener (nullptr);
     stft.reset();
+    analyser.reset();
     lfe.reset();
 }
 

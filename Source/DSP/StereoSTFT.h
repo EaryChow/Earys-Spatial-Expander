@@ -19,6 +19,15 @@ public:
     static constexpr int fftSize  = 1 << fftOrder;
     static constexpr int hopSize  = fftSize / 2;
 
+    class FrameListener
+    {
+    public:
+        virtual ~FrameListener() = default;
+        virtual void onFrame (float* fftBufL, float* fftBufR, int fftSize) = 0;
+    };
+
+    void setFrameListener (FrameListener* listener) { frameListener = listener; }
+
 private:
     void processFrame();
 
@@ -36,6 +45,8 @@ private:
     int outReady = 0;
     int framesCompleted = 0;
     double sampleRate_ = 48000.0;
+
+    FrameListener* frameListener = nullptr;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (StereoSTFT)
 };
