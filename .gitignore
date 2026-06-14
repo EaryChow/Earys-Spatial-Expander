@@ -1,3 +1,12 @@
 Builds/
-AGENTS.md
-design_spec.txt
+JuceLibraryCode/
+*.aps
+*.VC.db
+*.sdf
+*.opendb
+*.VC.opendb
+ipch/
+*.user
+*.suo
+.DS_Store
+Thumbs.db
