@@ -13,7 +13,7 @@ SpatialExpanderAudioProcessor::SpatialExpanderAudioProcessor()
           std::make_unique<juce::AudioParameterFloat> ("lfeLevel", "LFE Level",
               juce::NormalisableRange<float> (-60.0f, 12.0f, 0.5f), 0.0f),
           std::make_unique<juce::AudioParameterChoice> ("outputFormat", "Output Format",
-              juce::StringArray { "Auto", "5.1", "7.1", "9.1.6" }, 0),
+              juce::StringArray { "Auto", "3.0", "5.1", "7.1", "9.1.6" }, 0),
           std::make_unique<juce::AudioParameterChoice> ("windowSize", "Buffer Size",
               juce::StringArray { "512", "1024", "2048" }, 1)
       })
@@ -39,6 +39,7 @@ bool SpatialExpanderAudioProcessor::isBusesLayoutSupported (const BusesLayout& l
 
     auto out = layouts.getMainOutputChannelSet();
     if (out == juce::AudioChannelSet::stereo() ||
+        out == juce::AudioChannelSet::createLCR() ||
         out == juce::AudioChannelSet::create5point1() ||
         out == juce::AudioChannelSet::create7point1() ||
         out == juce::AudioChannelSet::create9point1point6())
@@ -183,6 +184,7 @@ juce::String SpatialExpanderAudioProcessor::getFormatWarningText (int selectedFo
 
     switch (selectedFormat)
     {
+        case Fmt30:  neededChannels = 3;  break;
         case Fmt51:  neededChannels = 6;  break;
         case Fmt71:  neededChannels = 8;  break;
         case Fmt916: neededChannels = 16; break;
@@ -206,9 +208,11 @@ juce::String SpatialExpanderAudioProcessor::getCurrentBusFormatName() const
     if (layout == juce::AudioChannelSet::create5point1())       return "5.1";
     if (layout == juce::AudioChannelSet::create7point1())       return "7.1";
     if (layout == juce::AudioChannelSet::create9point1point6()) return "9.1.6";
+    if (layout == juce::AudioChannelSet::createLCR())           return "3.0";
     if (layout == juce::AudioChannelSet::stereo())              return "Stereo";
 
     int n = layout.size();
+    if (n == 3)  return "3.0 (LCR)";
     if (n == 4)  return "3.1 (4 ch)";
     if (n == 6)  return "5.1 (6 ch)";
     if (n == 8)  return "7.1 (8 ch)";

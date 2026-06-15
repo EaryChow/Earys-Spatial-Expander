@@ -42,7 +42,7 @@ public:
     juce::String getFormatWarningText (int selectedFormat) const;
     juce::String getCurrentBusFormatName() const;
 
-    enum OutputFormat { Auto = 0, Fmt51, Fmt71, Fmt916 };
+    enum OutputFormat { Auto = 0, Fmt30, Fmt51, Fmt71, Fmt916 };
 
 private:
     void onFrame (const float* fftL, const float* fftR,
