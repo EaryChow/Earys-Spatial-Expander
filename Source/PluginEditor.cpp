@@ -113,7 +113,20 @@ void SpatialExpanderAudioProcessorEditor::timerCallback()
 {
     updateFormatComboBox();
     updateLatencyComboBox();
-    warningLabel.setText (processor.getMeasuredLatencyDebugString(), juce::dontSendNotification);
+    {
+        auto selectedId = formatComboBox.getSelectedId();
+        auto formatIdx = (selectedId > 0) ? selectedId - 1 : 0;
+        auto inputWarn  = processor.getInputWarningText();
+        auto formatWarn = processor.getFormatWarningText (formatIdx);
+        if (inputWarn.isNotEmpty() && formatWarn.isNotEmpty())
+            warningLabel.setText (inputWarn + "  " + formatWarn, juce::dontSendNotification);
+        else if (inputWarn.isNotEmpty())
+            warningLabel.setText (inputWarn, juce::dontSendNotification);
+        else if (formatWarn.isNotEmpty())
+            warningLabel.setText (formatWarn, juce::dontSendNotification);
+        else
+            warningLabel.setText ({}, juce::dontSendNotification);
+    }
 }
 
 void SpatialExpanderAudioProcessorEditor::updateFormatComboBox()

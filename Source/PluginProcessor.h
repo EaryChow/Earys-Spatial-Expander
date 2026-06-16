@@ -41,7 +41,6 @@ public:
 
     double getLatencyMs() const noexcept;
 
-    juce::String getMeasuredLatencyDebugString() const;
     juce::String getInputWarningText() const;
     juce::String getFormatWarningText (int selectedFormat) const;
     juce::String getCurrentBusFormatName() const;
