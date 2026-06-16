@@ -26,17 +26,29 @@ SpatialExpanderAudioProcessorEditor::SpatialExpanderAudioProcessorEditor (
     addAndMakeVisible (lfeLevelLabel);
 
     lfeLevelSlider.setSliderStyle (juce::Slider::LinearHorizontal);
-    lfeLevelSlider.setTextBoxStyle (juce::Slider::TextBoxRight, false, 60, 20);
-    lfeLevelSlider.setRange (-60.0, 12.0, 0.5);
+    lfeLevelSlider.setTextBoxStyle (juce::Slider::TextBoxRight, true, 60, 20);
+    lfeLevelSlider.setRange (-12.1, 12.0, 0.1);
     addAndMakeVisible (lfeLevelSlider);
     lfeLevelAttach = std::make_unique<juce::AudioProcessorValueTreeState::SliderAttachment>(
         processor.getAPVTS(), "lfeLevel", lfeLevelSlider);
-
+    // Must set after SliderAttachment, which overwrites these in its constructor
+    lfeLevelSlider.textFromValueFunction = [] (double value) -> juce::String
+    {
+        if (value < -12.0)
+            return "-inf dB";
+        return juce::String (value, 1) + " dB";
+    };
+    lfeLevelSlider.valueFromTextFunction = [] (const juce::String& text) -> double
+    {
+        if (text.containsIgnoreCase ("inf"))
+            return -12.1;
+        return text.getDoubleValue();
+    };
     formatLabel.setText ("Output Format", juce::dontSendNotification);
     formatLabel.setJustificationType (juce::Justification::centred);
     addAndMakeVisible (formatLabel);
 
-    formatComboBox.addItemList ({ "Auto", "3.0", "5.1", "7.1", "9.1.6" }, 1);
+    formatComboBox.addItemList ({ "Auto", "3.0", "5.1", "7.1", "9.1 (in 9.1.6)" }, 1);
     formatComboBox.setSelectedId (1);
     addAndMakeVisible (formatComboBox);
     formatAttach = std::make_unique<juce::AudioProcessorValueTreeState::ComboBoxAttachment>(
@@ -114,7 +126,7 @@ void SpatialExpanderAudioProcessorEditor::updateFormatComboBox()
     formatComboBox.addItem ("3.0", 2);
     formatComboBox.addItem ("5.1", 3);
     formatComboBox.addItem ("7.1", 4);
-    formatComboBox.addItem ("9.1.6", 5);
+    formatComboBox.addItem ("9.1 (in 9.1.6)", 5);
     formatComboBox.setSelectedId (currentId, juce::dontSendNotification);
 }
 

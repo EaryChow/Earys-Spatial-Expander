@@ -55,8 +55,16 @@ private:
 
     void parameterChanged (const juce::String& parameterID, float newValue) override;
     void handleAsyncUpdate() override;
+    void triggerCalibration();
+
+    enum class CalState : int { Normal, FadingOut, Reconfiguring, FadingIn };
 
     std::atomic<int> pendingWindowOrder { 0 };
+    std::atomic<CalState> calState { CalState::Normal };
+    std::atomic<int> fadeSamplesLeft { 0 };
+    int fadeSamplesTotal = 0;
+    std::atomic<bool> autoCalibrate { false };
+    std::atomic<bool> isTransportPlaying { false };
 
     StereoSTFT stft;
     SpatialAnalyser analyser;

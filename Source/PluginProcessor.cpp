@@ -11,9 +11,9 @@ SpatialExpanderAudioProcessor::SpatialExpanderAudioProcessor()
           std::make_unique<juce::AudioParameterFloat> ("lfeCutoff", "LFE Cutoff",
               juce::NormalisableRange<float> (40.0f, 200.0f, 1.0f), 80.0f),
           std::make_unique<juce::AudioParameterFloat> ("lfeLevel", "LFE Level",
-              juce::NormalisableRange<float> (-60.0f, 12.0f, 0.5f), 0.0f),
+              juce::NormalisableRange<float> (-12.1f, 12.0f, 0.1f), 0.0f),
           std::make_unique<juce::AudioParameterChoice> ("outputFormat", "Output Format",
-              juce::StringArray { "Auto", "3.0", "5.1", "7.1", "9.1.6" }, 0),
+              juce::StringArray { "Auto", "3.0", "5.1", "7.1", "9.1 (in 9.1.6)" }, 0),
           std::make_unique<juce::AudioParameterChoice> ("latency", "Latency",
               juce::StringArray { "512", "1024", "2048" }, 1)
       })
@@ -53,22 +53,24 @@ bool SpatialExpanderAudioProcessor::isBusesLayoutSupported (const BusesLayout& l
 
 void SpatialExpanderAudioProcessor::prepareToPlay (double sampleRate, int samplesPerBlock)
 {
+    fadeSamplesTotal = static_cast<int> (sampleRate * 0.01); // 10 ms
+
     int idx = static_cast<int> (apvts.getRawParameterValue ("latency")->load());
     int order = 9 + idx;
     stft.setWindowSize (order);
     stft.prepare (sampleRate);
     analyser.prepare (stft.fftSize);
 
-    int blockSize = samplesPerBlock;
+    int currentBlockSize = samplesPerBlock;
     int fftSize   = stft.fftSize;
     int hopSize   = stft.hopSize;
 
-    int firstOutput = blockSize * ((fftSize + hopSize - 1) / blockSize);
+    int firstOutput = currentBlockSize * ((fftSize + hopSize - 1) / currentBlockSize);
     int actualDelay = firstOutput - hopSize;
     delaySize       = fftSize - actualDelay;
     if (delaySize < 0) delaySize = 0;
 
-    delayCapacity   = std::max (delaySize, blockSize) * 4;
+    delayCapacity   = std::max (delaySize, currentBlockSize) * 4;
     delayC.assign (delayCapacity, 0.0f);
     delayL.assign (delayCapacity, 0.0f);
     delayR.assign (delayCapacity, 0.0f);
@@ -100,17 +102,47 @@ void SpatialExpanderAudioProcessor::processBlock (juce::AudioBuffer<float>& buff
     auto numInChannels  = buffer.getNumChannels();
     auto numOutChannels = buffer.getNumChannels();
 
+    // Track transport state for latency-change guard
+    if (auto* ph = getPlayHead())
+    {
+        if (auto pos = ph->getPosition())
+            isTransportPlaying.store (pos->getIsPlaying());
+        else
+            isTransportPlaying.store (false);
+    }
+    else
+    {
+        isTransportPlaying.store (false);
+    }
+
+    // ===== Calibration state machine =====
+    auto state = calState.load();
+
+    // Reconfiguring: output zero while message thread finishes
+    if (state == CalState::Reconfiguring)
+    {
+        for (int c = 0; c < numOutChannels; ++c)
+            buffer.clear (c, 0, numSamples);
+        return;
+    }
+
+    // --- Normal processing chain ---
     auto* inL = buffer.getReadPointer (0);
     auto* inR = (numInChannels > 1) ? buffer.getReadPointer (1) : buffer.getReadPointer (0);
 
     float lfeCutoff = apvts.getRawParameterValue ("lfeCutoff")->load();
-    float lfeLevel = juce::Decibels::decibelsToGain (
-        apvts.getRawParameterValue ("lfeLevel")->load());
+    float lfeLevelDb = apvts.getRawParameterValue ("lfeLevel")->load();
 
     if (lfeCutoff != prevLfeCutoff)
     {
         lfe.setCutoff (lfeCutoff);
         prevLfeCutoff = lfeCutoff;
+    }
+
+    if (autoCalibrate.exchange (false))
+    {
+        // TODO: Actual calibration logic once SpatialRenderer is implemented
+        // This hook will trigger gain-table measurement each time latency changes
     }
 
     stft.process (inL, inR, chC.data(), chLres.data(), chRres.data(), numSamples);
@@ -144,13 +176,66 @@ void SpatialExpanderAudioProcessor::processBlock (juce::AudioBuffer<float>& buff
         juce::FloatVectorOperations::copy (buffer.getWritePointer (2), chC.data(), numSamples);
     if (numOutChannels > 3)
     {
-        for (int i = 0; i < numSamples; ++i)
-            buffer.getWritePointer (3)[i] = chLFE[i] * lfeLevel;
+        if (lfeLevelDb >= -12.0f)
+        {
+            float gain = juce::Decibels::decibelsToGain (lfeLevelDb);
+            for (int i = 0; i < numSamples; ++i)
+                buffer.getWritePointer (3)[i] = chLFE[i] * gain;
+        }
+        else
+        {
+            buffer.clear (3, 0, numSamples);
+        }
     }
     if (numOutChannels > 4)
     {
         for (int c = 4; c < numOutChannels; ++c)
             buffer.clear (c, 0, numSamples);
+    }
+
+    // --- Fade-out (ramp to zero, then hand off reconfiguration to message thread) ---
+    if (state == CalState::FadingOut)
+    {
+        int left = fadeSamplesLeft.load();
+        int n = std::min (left, numSamples);
+        for (int i = 0; i < n; ++i)
+        {
+            float gain = static_cast<float> (left) / static_cast<float> (fadeSamplesTotal);
+            for (int c = 0; c < numOutChannels; ++c)
+                buffer.getWritePointer (c)[i] *= gain;
+            --left;
+        }
+        for (int i = n; i < numSamples; ++i)
+            for (int c = 0; c < numOutChannels; ++c)
+                buffer.getWritePointer (c)[i] = 0.0f;
+        fadeSamplesLeft.store (left);
+
+        if (left <= 0)
+        {
+            calState.store (CalState::Reconfiguring);
+            triggerAsyncUpdate();
+        }
+
+        return;
+    }
+
+    // --- Fade-in (ramp up to unity) ---
+    if (state == CalState::FadingIn)
+    {
+        int left = fadeSamplesLeft.load();
+        int n = std::min (left, numSamples);
+        int total = fadeSamplesTotal;
+        for (int i = 0; i < n; ++i)
+        {
+            float gain = 1.0f - static_cast<float> (left - 1) / static_cast<float> (total);
+            for (int c = 0; c < numOutChannels; ++c)
+                buffer.getWritePointer (c)[i] *= gain;
+            --left;
+        }
+        fadeSamplesLeft.store (left);
+
+        if (left <= 0)
+            calState.store (CalState::Normal);
     }
 }
 
@@ -158,13 +243,69 @@ void SpatialExpanderAudioProcessor::parameterChanged (const juce::String& parame
 {
     if (parameterID == "latency")
     {
+        // Guard: only allow when transport is stopped
+        if (isTransportPlaying.load())
+            return;
+
+        // Guard: don't interrupt an in-progress calibration
+        if (calState.load() != CalState::Normal)
+            return;
+
+        // Fallback: if not yet prepared, use legacy immediate path
+        if (fadeSamplesTotal <= 0)
+        {
+            pendingWindowOrder.store (9 + static_cast<int> (newValue));
+            triggerAsyncUpdate();
+            return;
+        }
+
+        // Initiate calibrated latency change (fade-out → reconfig → fade-in)
         pendingWindowOrder.store (9 + static_cast<int> (newValue));
-        triggerAsyncUpdate();
+        fadeSamplesLeft.store (fadeSamplesTotal);
+        calState.store (CalState::FadingOut);
     }
 }
 
 void SpatialExpanderAudioProcessor::handleAsyncUpdate()
 {
+    // Path 1: Audio thread finished fade-out; do real-time-unsafe reconfiguration here
+    if (calState.load() == CalState::Reconfiguring)
+    {
+        int newOrder = pendingWindowOrder.exchange (0);
+        if (newOrder > 0)
+        {
+            stft.setWindowSize (newOrder);
+            analyser.prepare (stft.fftSize);
+
+            int currentBlockSize = lastBlockSize;
+            if (currentBlockSize < 1) currentBlockSize = 512;
+            int fftSize = stft.fftSize;
+            int hopSize = stft.hopSize;
+
+            int firstOutput = currentBlockSize * ((fftSize + hopSize - 1) / currentBlockSize);
+            int actualDelay = firstOutput - hopSize;
+            delaySize       = fftSize - actualDelay;
+            if (delaySize < 0) delaySize = 0;
+    delayCapacity   = std::max (delaySize, currentBlockSize) * 4;
+            delayC.assign (delayCapacity, 0.0f);
+            delayL.assign (delayCapacity, 0.0f);
+            delayR.assign (delayCapacity, 0.0f);
+            delayWritePos   = 0;
+
+            float cutoff = apvts.getRawParameterValue ("lfeCutoff")->load();
+            lfe.prepare (getSampleRate(), fftSize, cutoff);
+            prevLfeCutoff = cutoff;
+        }
+
+        setLatencySamples (stft.fftSize);
+        updateHostDisplay();
+        triggerCalibration();
+        fadeSamplesLeft.store (fadeSamplesTotal);
+        calState.store (CalState::FadingIn);
+        return;
+    }
+
+    // Path 2: Legacy immediate reconfig (initial prepareToPlay or non-fade fallback)
     int newOrder = pendingWindowOrder.exchange (0);
     if (newOrder == 0)
         return;
@@ -172,16 +313,16 @@ void SpatialExpanderAudioProcessor::handleAsyncUpdate()
     stft.setWindowSize (newOrder);
     analyser.prepare (stft.fftSize);
 
-    int blockSize = lastBlockSize;
-    if (blockSize < 1) blockSize = 512;
+    int currentBlockSize = lastBlockSize;
+    if (currentBlockSize < 1) currentBlockSize = 512;
     int fftSize = stft.fftSize;
     int hopSize = stft.hopSize;
 
-    int firstOutput = blockSize * ((fftSize + hopSize - 1) / blockSize);
+    int firstOutput = currentBlockSize * ((fftSize + hopSize - 1) / currentBlockSize);
     int actualDelay = firstOutput - hopSize;
     delaySize       = fftSize - actualDelay;
     if (delaySize < 0) delaySize = 0;
-    delayCapacity   = std::max (delaySize, blockSize) * 4;
+    delayCapacity   = std::max (delaySize, currentBlockSize) * 4;
     delayC.assign (delayCapacity, 0.0f);
     delayL.assign (delayCapacity, 0.0f);
     delayR.assign (delayCapacity, 0.0f);
@@ -192,6 +333,11 @@ void SpatialExpanderAudioProcessor::handleAsyncUpdate()
     lfe.prepare (getSampleRate(), reportedLatency, cutoff);
     setLatencySamples (reportedLatency);
     updateHostDisplay();
+}
+
+void SpatialExpanderAudioProcessor::triggerCalibration()
+{
+    autoCalibrate.store (true);
 }
 
 double SpatialExpanderAudioProcessor::getLatencyMs() const noexcept
@@ -210,10 +356,10 @@ juce::String SpatialExpanderAudioProcessor::getMeasuredLatencyDebugString() cons
     if (order < 1) order = 9;
     int fftSize = 1 << order;
     int hopSize = fftSize / 2;
-    int blockSize = lastBlockSize;
-    if (blockSize < 1) blockSize = 512;
+    int currentBlockSize = lastBlockSize;
+    if (currentBlockSize < 1) currentBlockSize = 512;
 
-    int firstOutput = blockSize * ((fftSize + hopSize - 1) / blockSize);
+    int firstOutput = currentBlockSize * ((fftSize + hopSize - 1) / currentBlockSize);
     int actualDelay = firstOutput - hopSize;
     int extraDelay  = fftSize - actualDelay;
     if (extraDelay < 0) extraDelay = 0;
@@ -231,9 +377,9 @@ juce::String SpatialExpanderAudioProcessor::getMeasuredLatencyDebugString() cons
         std::vector<float> inL(maxSamples, 1.0f), inR(maxSamples, 1.0f);
         std::vector<float> outC(maxSamples, 0.0f), outL(maxSamples, 0.0f), outR(maxSamples, 0.0f);
 
-        for (int i = 0; i < maxSamples; i += blockSize)
+        for (int i = 0; i < maxSamples; i += currentBlockSize)
         {
-            int n = std::min(blockSize, maxSamples - i);
+            int n = std::min(currentBlockSize, maxSamples - i);
             testSTFT.process(inL.data() + i, inR.data() + i,
                              outC.data() + i, outL.data() + i, outR.data() + i, n);
         }
@@ -262,9 +408,9 @@ juce::String SpatialExpanderAudioProcessor::getMeasuredLatencyDebugString() cons
         std::vector<float> inL(maxSamples, 1.0f), inR(maxSamples, 1.0f);
         std::vector<float> outC(maxSamples, 0.0f), outL(maxSamples, 0.0f), outR(maxSamples, 0.0f);
 
-        for (int i = 0; i < maxSamples; i += blockSize)
+        for (int i = 0; i < maxSamples; i += currentBlockSize)
         {
-            int n = std::min(blockSize, maxSamples - i);
+            int n = std::min(currentBlockSize, maxSamples - i);
             testSTFT.process(inL.data() + i, inR.data() + i,
                              outC.data() + i, outL.data() + i, outR.data() + i, n);
         }
@@ -292,9 +438,9 @@ juce::String SpatialExpanderAudioProcessor::getMeasuredLatencyDebugString() cons
         std::vector<float> inL(maxSamples, 1.0f), inR(maxSamples, 1.0f);
         std::vector<float> outLFE(maxSamples, 0.0f);
 
-        for (int i = 0; i < maxSamples; i += blockSize)
+        for (int i = 0; i < maxSamples; i += currentBlockSize)
         {
-            int n = std::min(blockSize, maxSamples - i);
+            int n = std::min(currentBlockSize, maxSamples - i);
             testLFE.process(inL.data() + i, inR.data() + i, outLFE.data() + i, n);
         }
 
@@ -314,7 +460,7 @@ juce::String SpatialExpanderAudioProcessor::getMeasuredLatencyDebugString() cons
          + " | STFT=" + juce::String(actualDelay)
          + " +Extra=" + juce::String(extraDelay)
          + " =Total=" + juce::String(totalLatency)
-         + " BlockSize=" + juce::String(blockSize);
+         + " BlockSize=" + juce::String(currentBlockSize);
 }
 
 void SpatialExpanderAudioProcessor::onFrame (const float* fftL, const float* fftR,
@@ -380,7 +526,7 @@ juce::String SpatialExpanderAudioProcessor::getCurrentBusFormatName() const
     auto layout = output->getCurrentLayout();
     if (layout == juce::AudioChannelSet::create5point1())       return "5.1";
     if (layout == juce::AudioChannelSet::create7point1())       return "7.1";
-    if (layout == juce::AudioChannelSet::create9point1point6()) return "9.1.6";
+    if (layout == juce::AudioChannelSet::create9point1point6()) return "9.1 (in 9.1.6)";
     if (layout == juce::AudioChannelSet::createLCR())           return "3.0";
     if (layout == juce::AudioChannelSet::stereo())              return "Stereo";
 
@@ -389,7 +535,7 @@ juce::String SpatialExpanderAudioProcessor::getCurrentBusFormatName() const
     if (n == 4)  return "3.1 (4 ch)";
     if (n == 6)  return "5.1 (6 ch)";
     if (n == 8)  return "7.1 (8 ch)";
-    if (n == 16) return "9.1.6 (16 ch)";
+    if (n == 16) return "9.1 (in 9.1.6) (16 ch)";
     return juce::String (n) + " ch";
 }
 
