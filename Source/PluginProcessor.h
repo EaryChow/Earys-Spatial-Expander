@@ -46,12 +46,22 @@ public:
     juce::String getFormatWarningText (int selectedFormat) const;
     juce::String getCurrentBusFormatName() const;
 
+    int getNumSpectralOutputs() const noexcept;
+
     enum OutputFormat { Auto = 0, Fmt30, Fmt51, Fmt71, Fmt916 };
 
 private:
     void onFrame (const float* fftL, const float* fftR,
-                  float* fftC, float* fftLres, float* fftRres,
+                  float** fftOutputs, int numOutputs,
                   int fftSize) override;
+
+    void doCascade (const float* fftL, const float* fftR,
+                    float* fftCenter, float* fftFrontL, float* fftFrontR,
+                    float* fftRearL, float* fftRearR,
+                    float* fftTemp, int fftSize);
+
+    void applyStretch (float* fftCenter, float* fftFrontL, float* fftFrontR,
+                       float* fftRearL, float* fftRearR, int fftSize, float stretch);
 
     void parameterChanged (const juce::String& parameterID, float newValue) override;
     void handleAsyncUpdate() override;
@@ -71,10 +81,12 @@ private:
     SpatialAnalyser analyser;
     LFEExtractor lfe;
 
-    std::vector<float> chC, chLres, chRres;
+    std::vector<std::vector<float>> chOutputs;
+    std::vector<float*> chOutputPtrs;
     std::vector<float> chLFE;
 
-    std::vector<float> delayC, delayL, delayR;
+    std::vector<std::vector<float>> delayBufs;
+    std::vector<float> delayScratch;
     int delayWritePos = 0;
     int delaySize = 0;
     int delayCapacity = 0;
@@ -82,6 +94,17 @@ private:
     float prevLfeCutoff = 80.0f;
 
     int lastBlockSize = 512;
+
+    // Pre-allocated cascade scratch buffers (audio thread safe)
+    std::vector<float> cascadeCenter;
+    std::vector<float> cascadeFrontL;
+    std::vector<float> cascadeFrontR;
+    std::vector<float> cascadeRearL;
+    std::vector<float> cascadeRearR;
+    std::vector<float> cascadeTemp;
+    std::vector<float> cascadeLresSave;
+    std::vector<float> cascadeRresSave;
+    int cascadeFftSize = 0;
 
     juce::AudioProcessorValueTreeState apvts;
 

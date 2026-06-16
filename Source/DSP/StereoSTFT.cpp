@@ -21,19 +21,30 @@ void StereoSTFT::allocateBuffers()
         synthWindow[i + hopSize] = (denom > 1e-12f) ? w1 / denom : w1;
     }
 
-    auto outBufSize = static_cast<size_t> (fftSize) * 4;
     inBufL.assign (fftSize, 0.0f);
     inBufR.assign (fftSize, 0.0f);
-    outBufC.assign (outBufSize, 0.0f);
-    outBufLres.assign (outBufSize, 0.0f);
-    outBufRres.assign (outBufSize, 0.0f);
+
+    auto outBufSize = static_cast<size_t> (fftSize) * 4;
+    outBufs.resize (numOutputs);
+    for (int ch = 0; ch < numOutputs; ++ch)
+        outBufs[ch].assign (outBufSize, 0.0f);
 
     auto fftBufSize = static_cast<size_t> (fftSize) * 2;
     fftBufL.assign (fftBufSize, 0.0f);
     fftBufR.assign (fftBufSize, 0.0f);
-    fftBufC.assign (fftBufSize, 0.0f);
-    fftBufLres.assign (fftBufSize, 0.0f);
-    fftBufRres.assign (fftBufSize, 0.0f);
+
+    fftBufs.resize (numOutputs);
+    for (int ch = 0; ch < numOutputs; ++ch)
+        fftBufs[ch].assign (fftBufSize, 0.0f);
+}
+
+void StereoSTFT::setNumOutputs (int n)
+{
+    if (n == numOutputs)
+        return;
+    numOutputs = n;
+    if (fftSize > 0)
+        allocateBuffers();
 }
 
 void StereoSTFT::prepare (double sampleRate)
@@ -64,20 +75,10 @@ void StereoSTFT::reset()
         std::fill (inBufL.begin(), inBufL.end(), 0.0f);
         std::fill (inBufR.begin(), inBufR.end(), 0.0f);
     }
-    if (! outBufC.empty())
-    {
-        std::fill (outBufC.begin(), outBufC.end(), 0.0f);
-        std::fill (outBufLres.begin(), outBufLres.end(), 0.0f);
-        std::fill (outBufRres.begin(), outBufRres.end(), 0.0f);
-    }
-    if (! fftBufL.empty())
-    {
-        std::fill (fftBufL.begin(), fftBufL.end(), 0.0f);
-        std::fill (fftBufR.begin(), fftBufR.end(), 0.0f);
-        std::fill (fftBufC.begin(), fftBufC.end(), 0.0f);
-        std::fill (fftBufLres.begin(), fftBufLres.end(), 0.0f);
-        std::fill (fftBufRres.begin(), fftBufRres.end(), 0.0f);
-    }
+    for (auto& buf : outBufs)
+        std::fill (buf.begin(), buf.end(), 0.0f);
+    for (auto& buf : fftBufs)
+        std::fill (buf.begin(), buf.end(), 0.0f);
     inWp = 0;
     totalIn = 0;
     outWp = 0;
@@ -92,9 +93,9 @@ double StereoSTFT::getLatencyMs() const noexcept
 }
 
 void StereoSTFT::process (const float* inL, const float* inR,
-                           float* outC, float* outLres, float* outRres, int numSamples)
+                           float** outputs, int numSamples)
 {
-    auto outBufSize = static_cast<int> (outBufC.size());
+    auto outBufSize = static_cast<int> (outBufs[0].size());
 
     for (int i = 0; i < numSamples; ++i)
     {
@@ -110,29 +111,26 @@ void StereoSTFT::process (const float* inL, const float* inR,
     int available = std::min (numSamples, outReady);
     for (int i = 0; i < available; ++i)
     {
-        outC[i]    = outBufC[outRp];
-        outLres[i] = outBufLres[outRp];
-        outRres[i] = outBufRres[outRp];
-
-        outBufC[outRp]    = 0.0f;
-        outBufLres[outRp] = 0.0f;
-        outBufRres[outRp] = 0.0f;
-
+        for (int ch = 0; ch < numOutputs; ++ch)
+        {
+            outputs[ch][i] = outBufs[ch][outRp];
+            outBufs[ch][outRp] = 0.0f;
+        }
         outRp = (outRp + 1) % outBufSize;
     }
     outReady -= available;
 
     for (int i = available; i < numSamples; ++i)
     {
-        outC[i]    = 0.0f;
-        outLres[i] = 0.0f;
-        outRres[i] = 0.0f;
+        for (int ch = 0; ch < numOutputs; ++ch)
+            outputs[ch][i] = 0.0f;
     }
 }
 
 void StereoSTFT::processFrame()
 {
-    auto outBufSize = static_cast<int> (outBufC.size());
+    auto outBufSize = static_cast<int> (outBufs[0].size());
+    int outCh = numOutputs;
 
     for (int i = 0; i < fftSize; ++i)
     {
@@ -148,27 +146,36 @@ void StereoSTFT::processFrame()
 
     if (frameListener != nullptr)
     {
+        std::vector<float*> fftPtrs (outCh);
+        for (int ch = 0; ch < outCh; ++ch)
+            fftPtrs[ch] = fftBufs[ch].data();
+
         frameListener->onFrame (fftBufL.data(), fftBufR.data(),
-                                fftBufC.data(), fftBufLres.data(), fftBufRres.data(),
-                                fftSize);
+                                fftPtrs.data(), outCh, fftSize);
     }
     else
     {
-        std::copy (fftBufL.begin(), fftBufL.begin() + fftSize, fftBufC.begin());
-        std::copy (fftBufR.begin(), fftBufR.begin() + fftSize, fftBufLres.begin());
-        std::fill (fftBufRres.begin(), fftBufRres.begin() + fftSize, 0.0f);
+        for (int ch = 0; ch < outCh; ++ch)
+        {
+            if (ch == 0)
+                std::copy (fftBufL.begin(), fftBufL.begin() + fftSize, fftBufs[ch].begin());
+            else if (ch == 1)
+                std::copy (fftBufR.begin(), fftBufR.begin() + fftSize, fftBufs[ch].begin());
+            else
+                std::fill (fftBufs[ch].begin(), fftBufs[ch].begin() + fftSize, 0.0f);
+        }
     }
 
-    fft->performRealOnlyInverseTransform (fftBufC.data());
-    fft->performRealOnlyInverseTransform (fftBufLres.data());
-    fft->performRealOnlyInverseTransform (fftBufRres.data());
+    for (int ch = 0; ch < outCh; ++ch)
+        fft->performRealOnlyInverseTransform (fftBufs[ch].data());
 
-    for (int i = 0; i < fftSize; ++i)
+    for (int ch = 0; ch < outCh; ++ch)
     {
-        int pos = (outWp + i) % outBufSize;
-        outBufC[pos] += fftBufC[i] * synthWindow[i];
-        outBufLres[pos] += fftBufLres[i] * synthWindow[i];
-        outBufRres[pos] += fftBufRres[i] * synthWindow[i];
+        for (int i = 0; i < fftSize; ++i)
+        {
+            int pos = (outWp + i) % outBufSize;
+            outBufs[ch][pos] += fftBufs[ch][i] * synthWindow[i];
+        }
     }
     outWp = (outWp + hopSize) % outBufSize;
 

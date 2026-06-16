@@ -31,7 +31,6 @@ SpatialExpanderAudioProcessorEditor::SpatialExpanderAudioProcessorEditor (
     addAndMakeVisible (lfeLevelSlider);
     lfeLevelAttach = std::make_unique<juce::AudioProcessorValueTreeState::SliderAttachment>(
         processor.getAPVTS(), "lfeLevel", lfeLevelSlider);
-    // Must set after SliderAttachment, which overwrites these in its constructor
     lfeLevelSlider.textFromValueFunction = [] (double value) -> juce::String
     {
         if (value < -12.0)
@@ -44,6 +43,7 @@ SpatialExpanderAudioProcessorEditor::SpatialExpanderAudioProcessorEditor (
             return -12.1;
         return text.getDoubleValue();
     };
+
     formatLabel.setText ("Output Format", juce::dontSendNotification);
     formatLabel.setJustificationType (juce::Justification::centred);
     addAndMakeVisible (formatLabel);
@@ -65,6 +65,23 @@ SpatialExpanderAudioProcessorEditor::SpatialExpanderAudioProcessorEditor (
     leakCenterAttach = std::make_unique<juce::AudioProcessorValueTreeState::SliderAttachment>(
         processor.getAPVTS(), "leakCenter", leakCenterSlider);
 
+    stretchLabel.setText ("Stretch", juce::dontSendNotification);
+    stretchLabel.setJustificationType (juce::Justification::centred);
+    addAndMakeVisible (stretchLabel);
+
+    stretchSlider.setSliderStyle (juce::Slider::LinearHorizontal);
+    stretchSlider.setTextBoxStyle (juce::Slider::TextBoxRight, false, 50, 20);
+    stretchSlider.setRange (0.0, 1.0, 0.01);
+    addAndMakeVisible (stretchSlider);
+    stretchAttach = std::make_unique<juce::AudioProcessorValueTreeState::SliderAttachment>(
+        processor.getAPVTS(), "stretch", stretchSlider);
+
+    rearIsolationButton.setButtonText ("5.1 Rear Channel Isolation");
+    rearIsolationButton.setToggleState (true, juce::dontSendNotification);
+    addAndMakeVisible (rearIsolationButton);
+    rearIsolationAttach = std::make_unique<juce::AudioProcessorValueTreeState::ButtonAttachment>(
+        processor.getAPVTS(), "rearIsolation", rearIsolationButton);
+
     latencyLabel.setText ("Latency", juce::dontSendNotification);
     latencyLabel.setJustificationType (juce::Justification::centred);
     addAndMakeVisible (latencyLabel);
@@ -82,7 +99,7 @@ SpatialExpanderAudioProcessorEditor::SpatialExpanderAudioProcessorEditor (
 
     updateFormatComboBox();
 
-    setSize (550, 400);
+    setSize (550, 520);
     startTimerHz (4);
 }
 
@@ -113,6 +130,13 @@ void SpatialExpanderAudioProcessorEditor::resized()
     leakCenterLabel.setBounds (sl.removeFromLeft (100));
     leakCenterSlider.setBounds (sl.reduced (5));
 
+    sl = area.removeFromTop (50);
+    stretchLabel.setBounds (sl.removeFromLeft (100));
+    stretchSlider.setBounds (sl.reduced (5));
+
+    sl = area.removeFromTop (30);
+    rearIsolationButton.setBounds (sl.reduced (10, 0));
+
     auto fmtArea = area.removeFromTop (45);
     formatLabel.setBounds (fmtArea.removeFromTop (20));
     formatComboBox.setBounds (fmtArea.reduced (60, 0));
@@ -142,6 +166,11 @@ void SpatialExpanderAudioProcessorEditor::timerCallback()
         else
             warningLabel.setText ({}, juce::dontSendNotification);
     }
+
+    // Disable Stretch control in 3.1 mode
+    bool enableStretch = processor.getNumSpectralOutputs() > 3;
+    stretchSlider.setEnabled (enableStretch);
+    stretchLabel.setEnabled (enableStretch);
 }
 
 void SpatialExpanderAudioProcessorEditor::updateFormatComboBox()

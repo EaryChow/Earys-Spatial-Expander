@@ -44,6 +44,13 @@ private:
     juce::Label leakCenterLabel;
     std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> leakCenterAttach;
 
+    juce::Slider stretchSlider;
+    juce::Label stretchLabel;
+    std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> stretchAttach;
+
+    juce::ToggleButton rearIsolationButton;
+    std::unique_ptr<juce::AudioProcessorValueTreeState::ButtonAttachment> rearIsolationAttach;
+
     juce::Label warningLabel;
 
     int lastDetectedFormat = -1;

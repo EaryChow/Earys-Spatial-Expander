@@ -10,9 +10,10 @@ public:
     void prepare (double sampleRate);
     void reset();
     void setWindowSize (int newFftOrder);
+    void setNumOutputs (int n);
 
     void process (const float* inL, const float* inR,
-                  float* outC, float* outLres, float* outRres, int numSamples);
+                  float** outputs, int numSamples);
 
     int getLatencySamples() const noexcept { return hopSize; }
     double getLatencyMs() const noexcept;
@@ -21,13 +22,14 @@ public:
     int fftOrder = 9;
     int fftSize  = 512;
     int hopSize  = 256;
+    int numOutputs = 3;
 
     class FrameListener
     {
     public:
         virtual ~FrameListener() = default;
         virtual void onFrame (const float* fftL, const float* fftR,
-                              float* fftC, float* fftLres, float* fftRres,
+                              float** fftOutputs, int numOutputs,
                               int fftSize) = 0;
     };
 
@@ -42,9 +44,9 @@ private:
     std::vector<float> window;
     std::vector<float> synthWindow;
     std::vector<float> inBufL, inBufR;
-    std::vector<float> outBufC, outBufLres, outBufRres;
+    std::vector<std::vector<float>> outBufs;
     std::vector<float> fftBufL, fftBufR;
-    std::vector<float> fftBufC, fftBufLres, fftBufRres;
+    std::vector<std::vector<float>> fftBufs;
 
     int inWp = 0;
     int64_t totalIn = 0;
