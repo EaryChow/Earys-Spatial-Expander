@@ -102,19 +102,6 @@ void SpatialExpanderAudioProcessor::processBlock (juce::AudioBuffer<float>& buff
     auto numInChannels  = buffer.getNumChannels();
     auto numOutChannels = buffer.getNumChannels();
 
-    // Track transport state for latency-change guard
-    if (auto* ph = getPlayHead())
-    {
-        if (auto pos = ph->getPosition())
-            isTransportPlaying.store (pos->getIsPlaying());
-        else
-            isTransportPlaying.store (false);
-    }
-    else
-    {
-        isTransportPlaying.store (false);
-    }
-
     // ===== Calibration state machine =====
     auto state = calState.load();
 
@@ -243,10 +230,6 @@ void SpatialExpanderAudioProcessor::parameterChanged (const juce::String& parame
 {
     if (parameterID == "latency")
     {
-        // Guard: only allow when transport is stopped
-        if (isTransportPlaying.load())
-            return;
-
         // Guard: don't interrupt an in-progress calibration
         if (calState.load() != CalState::Normal)
             return;

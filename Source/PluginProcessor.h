@@ -63,7 +63,6 @@ private:
     std::atomic<int> fadeSamplesLeft { 0 };
     int fadeSamplesTotal = 0;
     std::atomic<bool> autoCalibrate { false };
-    std::atomic<bool> isTransportPlaying { false };
 
     StereoSTFT stft;
     SpatialAnalyser analyser;
