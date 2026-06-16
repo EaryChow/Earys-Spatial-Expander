@@ -134,6 +134,8 @@ void SpatialExpanderAudioProcessor::prepareToPlay (double sampleRate, int sample
     cascadeCenter.assign (cs, 0.0f);
     cascadeFrontL.assign (cs, 0.0f);
     cascadeFrontR.assign (cs, 0.0f);
+    cascadeSideL.assign (cs, 0.0f);
+    cascadeSideR.assign (cs, 0.0f);
     cascadeRearL.assign (cs, 0.0f);
     cascadeRearR.assign (cs, 0.0f);
     cascadeTemp.assign (cs, 0.0f);
@@ -268,9 +270,44 @@ void SpatialExpanderAudioProcessor::processBlock (juce::AudioBuffer<float>& buff
         maxUsedCh = juce::jmax (maxUsedCh, 4);
     }
 
-    // 5.1 RearL/RearR -> correct surround channels based on bus layout
-    if (numSpecOut > 3)
+    // Surround channel routing based on bus layout
+    if (numSpecOut > 5)
     {
+        // 7.1: chOutputs[3]=SideL, [4]=SideR, [5]=RearL, [6]=RearR
+        int sideLIdx = outputLayout.getChannelIndexForType (juce::AudioChannelSet::leftSurround);
+        int sideRIdx = outputLayout.getChannelIndexForType (juce::AudioChannelSet::rightSurround);
+        int rearLIdx = outputLayout.getChannelIndexForType (juce::AudioChannelSet::leftSurroundRear);
+        int rearRIdx = outputLayout.getChannelIndexForType (juce::AudioChannelSet::rightSurroundRear);
+
+        if (sideLIdx < 0 && numOutChannels > 4) sideLIdx = 4;
+        if (sideRIdx < 0 && numOutChannels > 5) sideRIdx = 5;
+        if (rearLIdx < 0 && numOutChannels > 6) rearLIdx = 6;
+        if (rearRIdx < 0 && numOutChannels > 7) rearRIdx = 7;
+
+        if (sideLIdx >= 0 && sideLIdx < numOutChannels)
+        {
+            juce::FloatVectorOperations::copy (buffer.getWritePointer (sideLIdx), chOutputs[3].data(), numSamples);
+            maxUsedCh = juce::jmax (maxUsedCh, sideLIdx + 1);
+        }
+        if (sideRIdx >= 0 && sideRIdx < numOutChannels)
+        {
+            juce::FloatVectorOperations::copy (buffer.getWritePointer (sideRIdx), chOutputs[4].data(), numSamples);
+            maxUsedCh = juce::jmax (maxUsedCh, sideRIdx + 1);
+        }
+        if (rearLIdx >= 0 && rearLIdx < numOutChannels)
+        {
+            juce::FloatVectorOperations::copy (buffer.getWritePointer (rearLIdx), chOutputs[5].data(), numSamples);
+            maxUsedCh = juce::jmax (maxUsedCh, rearLIdx + 1);
+        }
+        if (rearRIdx >= 0 && rearRIdx < numOutChannels)
+        {
+            juce::FloatVectorOperations::copy (buffer.getWritePointer (rearRIdx), chOutputs[6].data(), numSamples);
+            maxUsedCh = juce::jmax (maxUsedCh, rearRIdx + 1);
+        }
+    }
+    else if (numSpecOut > 3)
+    {
+        // 5.1: chOutputs[3]=RearL, [4]=RearR
         if (surroundLIdx >= 0 && surroundLIdx < numOutChannels)
         {
             juce::FloatVectorOperations::copy (buffer.getWritePointer (surroundLIdx), chOutputs[3].data(), numSamples);
@@ -399,6 +436,8 @@ void SpatialExpanderAudioProcessor::handleAsyncUpdate()
             cascadeCenter.assign (fftSize, 0.0f);
             cascadeFrontL.assign (fftSize, 0.0f);
             cascadeFrontR.assign (fftSize, 0.0f);
+            cascadeSideL.assign (fftSize, 0.0f);
+            cascadeSideR.assign (fftSize, 0.0f);
             cascadeRearL.assign (fftSize, 0.0f);
             cascadeRearR.assign (fftSize, 0.0f);
             cascadeTemp.assign (fftSize, 0.0f);
@@ -451,6 +490,8 @@ void SpatialExpanderAudioProcessor::handleAsyncUpdate()
     cascadeCenter.assign (fftSize, 0.0f);
     cascadeFrontL.assign (fftSize, 0.0f);
     cascadeFrontR.assign (fftSize, 0.0f);
+    cascadeSideL.assign (fftSize, 0.0f);
+    cascadeSideR.assign (fftSize, 0.0f);
     cascadeRearL.assign (fftSize, 0.0f);
     cascadeRearR.assign (fftSize, 0.0f);
     cascadeTemp.assign (fftSize, 0.0f);
@@ -460,7 +501,8 @@ void SpatialExpanderAudioProcessor::handleAsyncUpdate()
 
 void SpatialExpanderAudioProcessor::doCascade (const float* fftL, const float* fftR,
                                                 float* fftCenter, float* fftFrontL,
-                                                float* fftFrontR, float* fftRearL,
+                                                float* fftFrontR, float* fftSideL,
+                                                float* fftSideR, float* fftRearL,
                                                 float* fftRearR, float* fftTemp,
                                                 int fftSize)
 {
@@ -496,10 +538,26 @@ void SpatialExpanderAudioProcessor::doCascade (const float* fftL, const float* f
         std::copy (cascadeLresSave.begin(), cascadeLresSave.end(), fftRearL);
         std::copy (cascadeRresSave.begin(), cascadeRresSave.end(), fftRearR);
     }
+
+    if (numSpecOut <= 5)
+        return;
+
+    // Layer 3 left: Extract SideL, newFrontL, newRearL from (FrontL, RearL)
+    std::copy (fftFrontL, fftFrontL + fftSize, cascadeLresSave.data());
+    std::copy (fftRearL, fftRearL + fftSize, cascadeRresSave.data());
+    analyser.onFrame (cascadeLresSave.data(), cascadeRresSave.data(),
+                      fftSideL, fftFrontL, fftRearL, fftSize);
+
+    // Layer 3 right: Extract SideR, newFrontR, newRearR from (FrontR, RearR)
+    std::copy (fftFrontR, fftFrontR + fftSize, cascadeLresSave.data());
+    std::copy (fftRearR, fftRearR + fftSize, cascadeRresSave.data());
+    analyser.onFrame (cascadeLresSave.data(), cascadeRresSave.data(),
+                      fftSideR, fftFrontR, fftRearR, fftSize);
 }
 
-void SpatialExpanderAudioProcessor::applyStretch (float* /*fftCenter*/, float* fftFrontL,
-                                                   float* fftFrontR, float* fftRearL,
+void SpatialExpanderAudioProcessor::applyStretch (float* fftCenter, float* fftFrontL,
+                                                   float* fftFrontR, float* fftSideL,
+                                                   float* fftSideR, float* fftRearL,
                                                    float* fftRearR, int fftSize,
                                                    float stretch)
 {
@@ -510,14 +568,41 @@ void SpatialExpanderAudioProcessor::applyStretch (float* /*fftCenter*/, float* f
     float s = stretch;
     float invS = 1.0f - s;
 
-    for (int i = 0; i < fftSize; ++i)
+    if (numSpecOut <= 5)
     {
-        float rl = fftRearL[i];
-        float rr = fftRearR[i];
-        fftRearL[i] = rl * s;
-        fftRearR[i] = rr * s;
-        fftFrontL[i] += rl * invS;
-        fftFrontR[i] += rr * invS;
+        // 5.1: RearL/RearR fold to FrontL/FrontR
+        for (int i = 0; i < fftSize; ++i)
+        {
+            float rl = fftRearL[i];
+            float rr = fftRearR[i];
+            fftRearL[i] = rl * s;
+            fftRearR[i] = rr * s;
+            fftFrontL[i] += rl * invS;
+            fftFrontR[i] += rr * invS;
+        }
+    }
+    else
+    {
+        // 7.1+: SideL/SideR → Center/FrontL/FrontR, RearL/RearR → FrontL/FrontR
+        // At stretch=0: SideL→C(0.5)+FrontL(0.5), SideR→C(0.5)+FrontR(0.5),
+        //               RearL→FrontL(1.0), RearR→FrontR(1.0)
+        // At stretch=1: identity (all channels stay)
+        for (int i = 0; i < fftSize; ++i)
+        {
+            float sl = fftSideL[i];
+            float sr = fftSideR[i];
+            float rl = fftRearL[i];
+            float rr = fftRearR[i];
+
+            fftSideL[i] = sl * s;
+            fftSideR[i] = sr * s;
+            fftRearL[i] = rl * s;
+            fftRearR[i] = rr * s;
+
+            fftCenter[i] += (sl + sr) * invS * 0.5f;
+            fftFrontL[i] += sl * invS * 0.5f + rl * invS;
+            fftFrontR[i] += sr * invS * 0.5f + rr * invS;
+        }
     }
 }
 
@@ -533,6 +618,8 @@ void SpatialExpanderAudioProcessor::onFrame (const float* fftL, const float* fft
         cascadeCenter.resize (fftSize);
         cascadeFrontL.resize (fftSize);
         cascadeFrontR.resize (fftSize);
+        cascadeSideL.resize (fftSize);
+        cascadeSideR.resize (fftSize);
         cascadeRearL.resize (fftSize);
         cascadeRearR.resize (fftSize);
         cascadeTemp.resize (fftSize);
@@ -541,12 +628,14 @@ void SpatialExpanderAudioProcessor::onFrame (const float* fftL, const float* fft
 
     // Full cascade using pre-allocated buffers
     doCascade (fftL, fftR, cascadeCenter.data(), cascadeFrontL.data(),
-               cascadeFrontR.data(), cascadeRearL.data(), cascadeRearR.data(),
+               cascadeFrontR.data(), cascadeSideL.data(), cascadeSideR.data(),
+               cascadeRearL.data(), cascadeRearR.data(),
                cascadeTemp.data(), fftSize);
 
     // Stretch
     float stretch = apvts.getRawParameterValue ("stretch")->load();
     applyStretch (cascadeCenter.data(), cascadeFrontL.data(), cascadeFrontR.data(),
+                  cascadeSideL.data(), cascadeSideR.data(),
                   cascadeRearL.data(), cascadeRearR.data(), fftSize, stretch);
 
     // Calibration gain from ILD
@@ -594,6 +683,11 @@ void SpatialExpanderAudioProcessor::onFrame (const float* fftL, const float* fft
         applyGain (cascadeCenter.data(), fftSize);
         applyGain (cascadeFrontL.data(), fftSize);
         applyGain (cascadeFrontR.data(), fftSize);
+        if (numSpecOut > 5)
+        {
+            applyGain (cascadeSideL.data(), fftSize);
+            applyGain (cascadeSideR.data(), fftSize);
+        }
         applyGain (cascadeRearL.data(), fftSize);
         applyGain (cascadeRearR.data(), fftSize);
     }
@@ -601,19 +695,30 @@ void SpatialExpanderAudioProcessor::onFrame (const float* fftL, const float* fft
     // Write to output buffers
     // 3.0: outputs[0]=Center, [1]=Lres, [2]=Rres
     // 5.1: outputs[0]=Center, [1]=FrontL, [2]=FrontR, [3]=RearL, [4]=RearR
+    // 7.1: outputs[0]=Center, [1]=FrontL, [2]=FrontR, [3]=SideL, [4]=SideR, [5]=RearL, [6]=RearR
     if (numSpecOut <= 3)
     {
         std::copy (cascadeCenter.begin(), cascadeCenter.end(), fftOutputs[0]);
         std::copy (cascadeFrontL.begin(), cascadeFrontL.end(), fftOutputs[1]);
         std::copy (cascadeFrontR.begin(), cascadeFrontR.end(), fftOutputs[2]);
     }
-    else
+    else if (numSpecOut <= 5)
     {
         std::copy (cascadeCenter.begin(), cascadeCenter.end(), fftOutputs[0]);
         std::copy (cascadeFrontL.begin(), cascadeFrontL.end(), fftOutputs[1]);
         std::copy (cascadeFrontR.begin(), cascadeFrontR.end(), fftOutputs[2]);
         std::copy (cascadeRearL.begin(), cascadeRearL.end(), fftOutputs[3]);
         std::copy (cascadeRearR.begin(), cascadeRearR.end(), fftOutputs[4]);
+    }
+    else
+    {
+        std::copy (cascadeCenter.begin(), cascadeCenter.end(), fftOutputs[0]);
+        std::copy (cascadeFrontL.begin(), cascadeFrontL.end(), fftOutputs[1]);
+        std::copy (cascadeFrontR.begin(), cascadeFrontR.end(), fftOutputs[2]);
+        std::copy (cascadeSideL.begin(), cascadeSideL.end(), fftOutputs[3]);
+        std::copy (cascadeSideR.begin(), cascadeSideR.end(), fftOutputs[4]);
+        std::copy (cascadeRearL.begin(), cascadeRearL.end(), fftOutputs[5]);
+        std::copy (cascadeRearR.begin(), cascadeRearR.end(), fftOutputs[6]);
     }
 }
 
@@ -669,6 +774,8 @@ void SpatialExpanderAudioProcessor::runCalibration()
     std::vector<float> fftCenter (static_cast<size_t> (numBinsFull) * 2, 0.0f);
     std::vector<float> fftFrontL (static_cast<size_t> (numBinsFull) * 2, 0.0f);
     std::vector<float> fftFrontR (static_cast<size_t> (numBinsFull) * 2, 0.0f);
+    std::vector<float> fftSideL (static_cast<size_t> (numBinsFull) * 2, 0.0f);
+    std::vector<float> fftSideR (static_cast<size_t> (numBinsFull) * 2, 0.0f);
     std::vector<float> fftRearL (static_cast<size_t> (numBinsFull) * 2, 0.0f);
     std::vector<float> fftRearR (static_cast<size_t> (numBinsFull) * 2, 0.0f);
     std::vector<float> fftTemp (static_cast<size_t> (numBinsFull) * 2, 0.0f);
@@ -694,11 +801,13 @@ void SpatialExpanderAudioProcessor::runCalibration()
         // Run cascade
         doCascade (fftL.data(), fftR.data(),
                    fftCenter.data(), fftFrontL.data(),
-                   fftFrontR.data(), fftRearL.data(),
+                   fftFrontR.data(), fftSideL.data(),
+                   fftSideR.data(), fftRearL.data(),
                    fftRearR.data(), fftTemp.data(), fftSize);
 
         // Apply Stretch
         applyStretch (fftCenter.data(), fftFrontL.data(), fftFrontR.data(),
+                      fftSideL.data(), fftSideR.data(),
                       fftRearL.data(), fftRearR.data(), fftSize, stretch);
 
         // Measure total output power
@@ -721,7 +830,14 @@ void SpatialExpanderAudioProcessor::runCalibration()
                           + measurePower (fftFrontL.data())
                           + measurePower (fftFrontR.data());
 
-        if (numSpecOut > 3)
+        if (numSpecOut > 5)
+        {
+            totalPower += measurePower (fftSideL.data())
+                        + measurePower (fftSideR.data())
+                        + measurePower (fftRearL.data())
+                        + measurePower (fftRearR.data());
+        }
+        else if (numSpecOut > 3)
         {
             totalPower += measurePower (fftRearL.data())
                         + measurePower (fftRearR.data());

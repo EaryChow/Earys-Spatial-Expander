@@ -57,10 +57,12 @@ private:
 
     void doCascade (const float* fftL, const float* fftR,
                     float* fftCenter, float* fftFrontL, float* fftFrontR,
+                    float* fftSideL, float* fftSideR,
                     float* fftRearL, float* fftRearR,
                     float* fftTemp, int fftSize);
 
     void applyStretch (float* fftCenter, float* fftFrontL, float* fftFrontR,
+                       float* fftSideL, float* fftSideR,
                        float* fftRearL, float* fftRearR, int fftSize, float stretch);
 
     void parameterChanged (const juce::String& parameterID, float newValue) override;
@@ -99,6 +101,8 @@ private:
     std::vector<float> cascadeCenter;
     std::vector<float> cascadeFrontL;
     std::vector<float> cascadeFrontR;
+    std::vector<float> cascadeSideL;
+    std::vector<float> cascadeSideR;
     std::vector<float> cascadeRearL;
     std::vector<float> cascadeRearR;
     std::vector<float> cascadeTemp;
