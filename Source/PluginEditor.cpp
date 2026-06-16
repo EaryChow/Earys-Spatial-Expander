@@ -54,6 +54,17 @@ SpatialExpanderAudioProcessorEditor::SpatialExpanderAudioProcessorEditor (
     formatAttach = std::make_unique<juce::AudioProcessorValueTreeState::ComboBoxAttachment>(
         processor.getAPVTS(), "outputFormat", formatComboBox);
 
+    leakCenterLabel.setText ("Leak Center", juce::dontSendNotification);
+    leakCenterLabel.setJustificationType (juce::Justification::centred);
+    addAndMakeVisible (leakCenterLabel);
+
+    leakCenterSlider.setSliderStyle (juce::Slider::LinearHorizontal);
+    leakCenterSlider.setTextBoxStyle (juce::Slider::TextBoxRight, false, 50, 20);
+    leakCenterSlider.setRange (0.0, 1.5, 0.01);
+    addAndMakeVisible (leakCenterSlider);
+    leakCenterAttach = std::make_unique<juce::AudioProcessorValueTreeState::SliderAttachment>(
+        processor.getAPVTS(), "leakCenter", leakCenterSlider);
+
     latencyLabel.setText ("Latency", juce::dontSendNotification);
     latencyLabel.setJustificationType (juce::Justification::centred);
     addAndMakeVisible (latencyLabel);
@@ -71,7 +82,7 @@ SpatialExpanderAudioProcessorEditor::SpatialExpanderAudioProcessorEditor (
 
     updateFormatComboBox();
 
-    setSize (550, 350);
+    setSize (550, 400);
     startTimerHz (4);
 }
 
@@ -97,6 +108,10 @@ void SpatialExpanderAudioProcessorEditor::resized()
     sl = area.removeFromTop (50);
     lfeLevelLabel.setBounds (sl.removeFromLeft (100));
     lfeLevelSlider.setBounds (sl.reduced (5));
+
+    sl = area.removeFromTop (50);
+    leakCenterLabel.setBounds (sl.removeFromLeft (100));
+    leakCenterSlider.setBounds (sl.reduced (5));
 
     auto fmtArea = area.removeFromTop (45);
     formatLabel.setBounds (fmtArea.removeFromTop (20));

@@ -15,11 +15,15 @@ SpatialExpanderAudioProcessor::SpatialExpanderAudioProcessor()
           std::make_unique<juce::AudioParameterChoice> ("outputFormat", "Output Format",
               juce::StringArray { "Auto", "3.0", "5.1", "7.1", "9.1 (in 9.1.6)" }, 0),
           std::make_unique<juce::AudioParameterChoice> ("latency", "Latency",
-              juce::StringArray { "512", "1024", "2048" }, 1)
+              juce::StringArray { "512", "1024", "2048" }, 1),
+          std::make_unique<juce::AudioParameterFloat> ("leakCenter", "Leak Center",
+              juce::NormalisableRange<float> (0.0f, 1.5f, 0.01f), 0.0f)
       })
 {
     stft.setFrameListener (this);
     apvts.addParameterListener ("latency", this);
+
+    gainTable.resize (ildTableSize, 1.0f);
 }
 
 SpatialExpanderAudioProcessor::~SpatialExpanderAudioProcessor() {}
@@ -87,6 +91,8 @@ void SpatialExpanderAudioProcessor::prepareToPlay (double sampleRate, int sample
     chLFE.resize (samplesPerBlock, 0.0f);
 
     prevLfeCutoff = cutoff;
+
+    runCalibration();
 }
 
 void SpatialExpanderAudioProcessor::releaseResources()
@@ -126,12 +132,6 @@ void SpatialExpanderAudioProcessor::processBlock (juce::AudioBuffer<float>& buff
         prevLfeCutoff = lfeCutoff;
     }
 
-    if (autoCalibrate.exchange (false))
-    {
-        // TODO: Actual calibration logic once SpatialRenderer is implemented
-        // This hook will trigger gain-table measurement each time latency changes
-    }
-
     stft.process (inL, inR, chC.data(), chLres.data(), chRres.data(), numSamples);
     lfe.process (inL, inR, chLFE.data(), numSamples);
 
@@ -153,6 +153,24 @@ void SpatialExpanderAudioProcessor::processBlock (juce::AudioBuffer<float>& buff
         delayR[delayWritePos] = r;
 
         delayWritePos = (delayWritePos + 1) % delayCapacity;
+    }
+
+    // --- Leak Center: redistribute calibrated Center to Front L/R ---
+    {
+        float leak = apvts.getRawParameterValue ("leakCenter")->load();
+        if (leak > 0.0f)
+        {
+            float denom = std::sqrt (1.0f + 2.0f * leak);
+            float centerAmount = 1.0f / denom;
+            float sideAmount   = std::sqrt (leak) / denom;
+            for (int i = 0; i < numSamples; ++i)
+            {
+                float cOrig = chC[i];
+                chC[i]    = cOrig * centerAmount;
+                chLres[i] += cOrig * sideAmount;
+                chRres[i] += cOrig * sideAmount;
+            }
+        }
     }
 
     if (numOutChannels > 0)
@@ -280,9 +298,10 @@ void SpatialExpanderAudioProcessor::handleAsyncUpdate()
             prevLfeCutoff = cutoff;
         }
 
+        runCalibration();
+
         setLatencySamples (stft.fftSize);
         updateHostDisplay();
-        triggerCalibration();
         fadeSamplesLeft.store (fadeSamplesTotal);
         calState.store (CalState::FadingIn);
         return;
@@ -318,9 +337,122 @@ void SpatialExpanderAudioProcessor::handleAsyncUpdate()
     updateHostDisplay();
 }
 
-void SpatialExpanderAudioProcessor::triggerCalibration()
+void SpatialExpanderAudioProcessor::runCalibration()
 {
-    autoCalibrate.store (true);
+    int fftSize = stft.fftSize;
+    if (fftSize < 2)
+        return;
+
+    int numBinsFull = fftSize;
+    int numBinsHalf = fftSize / 2 + 1;
+
+    // Build pink noise spectrum (magnitude ~ 1/sqrt(k))
+    std::vector<float> pinkMag (static_cast<size_t> (numBinsHalf));
+    double totalPinkPower = 0.0;
+    for (int k = 0; k < numBinsHalf; ++k)
+    {
+        pinkMag[static_cast<size_t> (k)] = (k == 0) ? 1.0f
+            : 1.0f / std::sqrt (static_cast<float> (k));
+        totalPinkPower += static_cast<double> (pinkMag[static_cast<size_t> (k)])
+                        * static_cast<double> (pinkMag[static_cast<size_t> (k)]);
+    }
+    double invNorm = 1.0 / std::sqrt (totalPinkPower);
+    for (int k = 0; k < numBinsHalf; ++k)
+        pinkMag[static_cast<size_t> (k)] *= static_cast<float> (invNorm);
+
+    // Deterministic random phases
+    std::mt19937 rng (12345);
+    std::uniform_real_distribution<float> phaseDist (0.0f,
+        2.0f * juce::MathConstants<float>::pi);
+
+    // Build complex pink noise spectrum (interleaved real FFT format)
+    std::vector<float> noiseSpec (static_cast<size_t> (numBinsFull) * 2, 0.0f);
+    for (int k = 0; k < numBinsHalf; ++k)
+    {
+        float phase = phaseDist (rng);
+        float re = pinkMag[static_cast<size_t> (k)] * std::cos (phase);
+        float im = pinkMag[static_cast<size_t> (k)] * std::sin (phase);
+        if (k == 0)
+            noiseSpec[0] = re;
+        else if (k == fftSize / 2)
+            noiseSpec[1] = re;
+        else
+        {
+            size_t idx = static_cast<size_t> (k) * 2;
+            noiseSpec[idx]     = re;
+            noiseSpec[idx + 1] = im;
+        }
+    }
+
+    // Buffers for panned input and extraction output
+    std::vector<float> fftL (static_cast<size_t> (numBinsFull) * 2, 0.0f);
+    std::vector<float> fftR (static_cast<size_t> (numBinsFull) * 2, 0.0f);
+    std::vector<float> fftC  (static_cast<size_t> (numBinsFull) * 2, 0.0f);
+    std::vector<float> fftLr (static_cast<size_t> (numBinsFull) * 2, 0.0f);
+    std::vector<float> fftRr (static_cast<size_t> (numBinsFull) * 2, 0.0f);
+
+    std::vector<float> newTable (static_cast<size_t> (ildTableSize));
+    double refPower = 0.0;
+
+    // Sweep ILD from -60 to +60 dB in 1 dB steps
+    for (int iIdx = 0; iIdx < ildTableSize; ++iIdx)
+    {
+        float ildDb = static_cast<float> (iIdx - 60);
+
+        // Constant-power panning gains
+        float ratio = std::pow (10.0f, ildDb / 20.0f);
+        float panL  = ratio / std::sqrt (1.0f + ratio * ratio);
+        float panR  = 1.0f / std::sqrt (1.0f + ratio * ratio);
+
+        // Scale noise by pan gains
+        for (int k = 0; k < numBinsFull; ++k)
+        {
+            fftL[static_cast<size_t> (k)] = noiseSpec[static_cast<size_t> (k)] * panL;
+            fftR[static_cast<size_t> (k)] = noiseSpec[static_cast<size_t> (k)] * panR;
+        }
+
+        // Run phantom-center extraction (same algorithm as main path)
+        analyser.onFrame (fftL.data(), fftR.data(),
+                          fftC.data(), fftLr.data(), fftRr.data(), fftSize);
+
+        // Measure total output power from complex spectra
+        double totalPower = 0.0;
+
+        // DC bin (k=0)
+        for (int ch = 0; ch < 3; ++ch)
+        {
+            float* buf = (ch == 0) ? fftC.data() : (ch == 1) ? fftLr.data() : fftRr.data();
+            totalPower += static_cast<double> (buf[0]) * static_cast<double> (buf[0]);
+        }
+
+        // Nyquist bin (k=fftSize/2, at index 1 in packed format)
+        for (int ch = 0; ch < 3; ++ch)
+        {
+            float* buf = (ch == 0) ? fftC.data() : (ch == 1) ? fftLr.data() : fftRr.data();
+            totalPower += static_cast<double> (buf[1]) * static_cast<double> (buf[1]);
+        }
+
+        // All other bins
+        for (int k = 1; k < fftSize / 2; ++k)
+        {
+            size_t idx = static_cast<size_t> (k) * 2;
+            for (int ch = 0; ch < 3; ++ch)
+            {
+                float* buf = (ch == 0) ? fftC.data() : (ch == 1) ? fftLr.data() : fftRr.data();
+                double re = buf[idx];
+                double im = buf[idx + 1];
+                totalPower += re * re + im * im;
+            }
+        }
+
+        if (iIdx == 0)
+            refPower = totalPower;
+
+        newTable[static_cast<size_t> (iIdx)] = (totalPower > 1e-18)
+            ? static_cast<float> (std::sqrt (refPower / totalPower)) : 1.0f;
+    }
+
+    gainTable = std::move (newTable);
 }
 
 double SpatialExpanderAudioProcessor::getLatencyMs() const noexcept
@@ -337,6 +469,56 @@ void SpatialExpanderAudioProcessor::onFrame (const float* fftL, const float* fft
                                               int fftSize)
 {
     analyser.onFrame (fftL, fftR, fftC, fftLres, fftRres, fftSize);
+
+    if (gainTable.empty())
+        return;
+
+    // Estimate ILD from input spectra (ratio of L/R total power)
+    double sumL2 = 0.0, sumR2 = 0.0;
+
+    // DC bin
+    sumL2 += static_cast<double> (fftL[0]) * static_cast<double> (fftL[0]);
+    sumR2 += static_cast<double> (fftR[0]) * static_cast<double> (fftR[0]);
+
+    // Nyquist bin
+    sumL2 += static_cast<double> (fftL[1]) * static_cast<double> (fftL[1]);
+    sumR2 += static_cast<double> (fftR[1]) * static_cast<double> (fftR[1]);
+
+    for (int k = 1; k < fftSize / 2; ++k)
+    {
+        size_t idx = static_cast<size_t> (k) * 2;
+        double lRe = fftL[idx], lIm = fftL[idx + 1];
+        double rRe = fftR[idx], rIm = fftR[idx + 1];
+        sumL2 += lRe * lRe + lIm * lIm;
+        sumR2 += rRe * rRe + rIm * rIm;
+    }
+
+    float ildDb;
+    if (sumL2 < 1e-18 && sumR2 < 1e-18)
+        ildDb = 0.0f;
+    else if (sumL2 < 1e-18)
+        ildDb = -60.0f;
+    else if (sumR2 < 1e-18)
+        ildDb = 60.0f;
+    else
+        ildDb = 10.0f * std::log10 (static_cast<float> (sumL2 / sumR2));
+
+    ildDb = std::max (-60.0f, std::min (60.0f, ildDb));
+    int idx = static_cast<int> (std::round (ildDb)) + 60;
+    idx = std::max (0, std::min (ildTableSize - 1, idx));
+
+    float gain = gainTable[static_cast<size_t> (idx)];
+
+    // Apply gain uniformly to all output spectra
+    auto applyGain = [gain](float* buf, int size)
+    {
+        for (int i = 0; i < size; ++i)
+            buf[i] *= gain;
+    };
+
+    applyGain (fftC,    fftSize);
+    applyGain (fftLres, fftSize);
+    applyGain (fftRres, fftSize);
 }
 
 bool SpatialExpanderAudioProcessor::hasEditor() const

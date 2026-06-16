@@ -1,5 +1,6 @@
 #pragma once
 #include <atomic>
+#include <random>
 #include <JuceHeader.h>
 #include "DSP/LFEExtractor.h"
 #include "DSP/StereoSTFT.h"
@@ -54,7 +55,7 @@ private:
 
     void parameterChanged (const juce::String& parameterID, float newValue) override;
     void handleAsyncUpdate() override;
-    void triggerCalibration();
+    void runCalibration();
 
     enum class CalState : int { Normal, FadingOut, Reconfiguring, FadingIn };
 
@@ -62,7 +63,9 @@ private:
     std::atomic<CalState> calState { CalState::Normal };
     std::atomic<int> fadeSamplesLeft { 0 };
     int fadeSamplesTotal = 0;
-    std::atomic<bool> autoCalibrate { false };
+
+    static constexpr int ildTableSize = 121;
+    std::vector<float> gainTable;
 
     StereoSTFT stft;
     SpatialAnalyser analyser;

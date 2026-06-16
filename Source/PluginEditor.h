@@ -40,6 +40,10 @@ private:
     juce::Label latencyLabel;
     std::unique_ptr<juce::AudioProcessorValueTreeState::ComboBoxAttachment> latencyAttach;
 
+    juce::Slider leakCenterSlider;
+    juce::Label leakCenterLabel;
+    std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> leakCenterAttach;
+
     juce::Label warningLabel;
 
     int lastDetectedFormat = -1;
