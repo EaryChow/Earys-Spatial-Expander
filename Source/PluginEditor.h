@@ -34,9 +34,11 @@ private:
     juce::Label formatLabel;
     std::unique_ptr<juce::AudioProcessorValueTreeState::ComboBoxAttachment> formatAttach;
 
-    juce::ComboBox windowSizeComboBox;
-    juce::Label windowSizeLabel;
-    std::unique_ptr<juce::AudioProcessorValueTreeState::ComboBoxAttachment> windowSizeAttach;
+    void updateLatencyComboBox();
+
+    juce::ComboBox latencyComboBox;
+    juce::Label latencyLabel;
+    std::unique_ptr<juce::AudioProcessorValueTreeState::ComboBoxAttachment> latencyAttach;
 
     juce::Label warningLabel;
 

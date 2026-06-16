@@ -1,7 +1,8 @@
 #pragma once
 #include <JuceHeader.h>
+#include "StereoSTFT.h"
 
-class SpatialAnalyser
+class SpatialAnalyser : public StereoSTFT::FrameListener
 {
 public:
     SpatialAnalyser();
@@ -10,9 +11,9 @@ public:
     void prepare (int fftSize);
     void reset();
 
-    void processFrame (const float* fftL, const float* fftR,
-                       float* fftC, float* fftLres, float* fftRres,
-                       int fftSize);
+    void onFrame (const float* fftL, const float* fftR,
+                  float* fftC, float* fftLres, float* fftRres,
+                  int fftSize) override;
 
 private:
 

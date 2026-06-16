@@ -42,15 +42,15 @@ SpatialExpanderAudioProcessorEditor::SpatialExpanderAudioProcessorEditor (
     formatAttach = std::make_unique<juce::AudioProcessorValueTreeState::ComboBoxAttachment>(
         processor.getAPVTS(), "outputFormat", formatComboBox);
 
-    windowSizeLabel.setText ("Buffer Size", juce::dontSendNotification);
-    windowSizeLabel.setJustificationType (juce::Justification::centred);
-    addAndMakeVisible (windowSizeLabel);
+    latencyLabel.setText ("Latency", juce::dontSendNotification);
+    latencyLabel.setJustificationType (juce::Justification::centred);
+    addAndMakeVisible (latencyLabel);
 
-    windowSizeComboBox.addItemList ({ "512", "1024", "2048" }, 1);
-    windowSizeComboBox.setSelectedId (2);
-    addAndMakeVisible (windowSizeComboBox);
-    windowSizeAttach = std::make_unique<juce::AudioProcessorValueTreeState::ComboBoxAttachment>(
-        processor.getAPVTS(), "windowSize", windowSizeComboBox);
+    updateLatencyComboBox();
+    latencyComboBox.setSelectedId (2);
+    addAndMakeVisible (latencyComboBox);
+    latencyAttach = std::make_unique<juce::AudioProcessorValueTreeState::ComboBoxAttachment>(
+        processor.getAPVTS(), "latency", latencyComboBox);
 
     warningLabel.setFont (juce::Font (juce::FontOptions (12.0f)));
     warningLabel.setColour (juce::Label::textColourId, juce::Colours::orange);
@@ -90,9 +90,9 @@ void SpatialExpanderAudioProcessorEditor::resized()
     formatLabel.setBounds (fmtArea.removeFromTop (20));
     formatComboBox.setBounds (fmtArea.reduced (60, 0));
 
-    auto winArea = area.removeFromTop (45);
-    windowSizeLabel.setBounds (winArea.removeFromTop (20));
-    windowSizeComboBox.setBounds (winArea.reduced (60, 0));
+    auto latArea = area.removeFromTop (45);
+    latencyLabel.setBounds (latArea.removeFromTop (20));
+    latencyComboBox.setBounds (latArea.reduced (60, 0));
 
     warningLabel.setBounds (area.reduced (10, 0));
 }
@@ -100,19 +100,8 @@ void SpatialExpanderAudioProcessorEditor::resized()
 void SpatialExpanderAudioProcessorEditor::timerCallback()
 {
     updateFormatComboBox();
-
-    auto selected = processor.getAPVTS().getRawParameterValue ("outputFormat")->load();
-    auto selectedInt = static_cast<int> (selected);
-
-    auto inputWarn = processor.getInputWarningText();
-    auto fmtWarn = processor.getFormatWarningText (selectedInt);
-
-    if (! inputWarn.isEmpty())
-        warningLabel.setText (inputWarn, juce::dontSendNotification);
-    else if (! fmtWarn.isEmpty())
-        warningLabel.setText (fmtWarn, juce::dontSendNotification);
-    else
-        warningLabel.setText ({}, juce::dontSendNotification);
+    updateLatencyComboBox();
+    warningLabel.setText (processor.getMeasuredLatencyDebugString(), juce::dontSendNotification);
 }
 
 void SpatialExpanderAudioProcessorEditor::updateFormatComboBox()
@@ -127,4 +116,22 @@ void SpatialExpanderAudioProcessorEditor::updateFormatComboBox()
     formatComboBox.addItem ("7.1", 4);
     formatComboBox.addItem ("9.1.6", 5);
     formatComboBox.setSelectedId (currentId, juce::dontSendNotification);
+}
+
+void SpatialExpanderAudioProcessorEditor::updateLatencyComboBox()
+{
+    auto sr = processor.getSampleRate();
+    if (sr < 1000.0) sr = 48000.0;
+
+    auto currentId = latencyComboBox.getSelectedId();
+    int values[] = { 512, 1024, 2048 };
+
+    latencyComboBox.clear (juce::dontSendNotification);
+    for (int i = 0; i < 3; ++i)
+    {
+        double ms = static_cast<double> (values[i]) / sr * 1000.0;
+        juce::String label = juce::String (values[i]) + " (" + juce::String (ms, 1) + " ms)";
+        latencyComboBox.addItem (label, i + 1);
+    }
+    latencyComboBox.setSelectedId (currentId, juce::dontSendNotification);
 }

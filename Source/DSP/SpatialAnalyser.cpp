@@ -11,9 +11,9 @@ void SpatialAnalyser::reset()
 {
 }
 
-void SpatialAnalyser::processFrame (const float* fftL, const float* fftR,
-                                     float* fftC, float* fftLres, float* fftRres,
-                                     int fftSize)
+void SpatialAnalyser::onFrame (const float* fftL, const float* fftR,
+                                float* fftC, float* fftLres, float* fftRres,
+                                int fftSize)
 {
     auto numBins = fftSize / 2 + 1;
 

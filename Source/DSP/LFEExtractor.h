@@ -16,21 +16,29 @@ public:
     int getLatencySamples() const noexcept { return totalLatency; }
 
 private:
-    static constexpr int firOrder = 510;
-    static constexpr int firNumTaps = firOrder + 1;
-    static constexpr int firDelay = firOrder / 2;
+    void designBesselLowPass (double cutoff);
+    void computeGroupDelay();
 
-    std::vector<float> coeffs;
-    std::vector<float> firBuf;
-    int firPos = 0;
+    struct Biquad
+    {
+        float b0 = 1.0f, b1 = 0.0f, b2 = 0.0f, a1 = 0.0f, a2 = 0.0f;
+        float x1 = 0.0f, x2 = 0.0f, y1 = 0.0f, y2 = 0.0f;
+
+        void reset() noexcept;
+        float process (float x) noexcept;
+    };
+
+    Biquad biquad1, biquad2;
 
     std::vector<float> extraDelay;
-    int extraPos = 0;
+    int writePos = 0;
+    int effectiveExtraDelay = 0;
+    int iirGroupDelay = 0;
     int totalLatency = 0;
 
     double sampleRate_ = 48000.0;
-
-    static void designLowPass (std::vector<float>& coeffs, double sampleRate, double cutoff);
+    double cutoff_ = 80.0;
+    int stftLatencySamples_ = 256;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (LFEExtractor)
 };

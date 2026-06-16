@@ -7,7 +7,8 @@
 
 class SpatialExpanderAudioProcessor : public juce::AudioProcessor,
                                        private StereoSTFT::FrameListener,
-                                       private juce::AudioProcessorValueTreeState::Listener
+                                       private juce::AudioProcessorValueTreeState::Listener,
+                                       private juce::AsyncUpdater
 {
 public:
     SpatialExpanderAudioProcessor();
@@ -38,6 +39,9 @@ public:
 
     juce::AudioProcessorValueTreeState& getAPVTS() { return apvts; }
 
+    double getLatencyMs() const noexcept;
+
+    juce::String getMeasuredLatencyDebugString() const;
     juce::String getInputWarningText() const;
     juce::String getFormatWarningText (int selectedFormat) const;
     juce::String getCurrentBusFormatName() const;
@@ -50,10 +54,9 @@ private:
                   int fftSize) override;
 
     void parameterChanged (const juce::String& parameterID, float newValue) override;
+    void handleAsyncUpdate() override;
 
     std::atomic<int> pendingWindowOrder { 0 };
-
-    int blockSize = 512;
 
     StereoSTFT stft;
     SpatialAnalyser analyser;
@@ -62,7 +65,14 @@ private:
     std::vector<float> chC, chLres, chRres;
     std::vector<float> chLFE;
 
+    std::vector<float> delayC, delayL, delayR;
+    int delayWritePos = 0;
+    int delaySize = 0;
+    int delayCapacity = 0;
+
     float prevLfeCutoff = 80.0f;
+
+    int lastBlockSize = 512;
 
     juce::AudioProcessorValueTreeState apvts;
 

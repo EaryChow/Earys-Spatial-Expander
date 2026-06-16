@@ -5,13 +5,13 @@ StereoSTFT::StereoSTFT() : fft (std::make_unique<juce::dsp::FFT> (fftOrder)) {}
 void StereoSTFT::allocateBuffers()
 {
     window.resize (fftSize);
-    synthWindow.resize (fftSize);
     for (int i = 0; i < fftSize; ++i)
     {
         float w = 0.5f * (1.0f - std::cos (2.0f * juce::MathConstants<float>::pi * i / fftSize));
         window[i] = w;
     }
 
+    synthWindow.resize (fftSize);
     for (int i = 0; i < hopSize; ++i)
     {
         float w0 = window[i];
@@ -96,7 +96,6 @@ void StereoSTFT::process (const float* inL, const float* inR,
 {
     auto outBufSize = static_cast<int> (outBufC.size());
 
-    // Step 1: Write all input and process all pending frames
     for (int i = 0; i < numSamples; ++i)
     {
         inBufL[inWp] = inL[i];
@@ -108,15 +107,14 @@ void StereoSTFT::process (const float* inL, const float* inR,
             processFrame();
     }
 
-    // Step 2: Output all available samples at once
     int available = std::min (numSamples, outReady);
     for (int i = 0; i < available; ++i)
     {
-        outC[i] = outBufC[outRp];
+        outC[i]    = outBufC[outRp];
         outLres[i] = outBufLres[outRp];
         outRres[i] = outBufRres[outRp];
 
-        outBufC[outRp] = 0.0f;
+        outBufC[outRp]    = 0.0f;
         outBufLres[outRp] = 0.0f;
         outBufRres[outRp] = 0.0f;
 
@@ -124,10 +122,9 @@ void StereoSTFT::process (const float* inL, const float* inR,
     }
     outReady -= available;
 
-    // Step 3: Zero out any deficit (only during startup latency)
     for (int i = available; i < numSamples; ++i)
     {
-        outC[i] = 0.0f;
+        outC[i]    = 0.0f;
         outLres[i] = 0.0f;
         outRres[i] = 0.0f;
     }

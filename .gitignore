@@ -1,5 +1,6 @@
 Builds/
 JuceLibraryCode/
+design_spec.txt
 *.aps
 *.VC.db
 *.sdf
