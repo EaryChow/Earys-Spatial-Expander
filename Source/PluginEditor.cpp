@@ -76,6 +76,25 @@ SpatialExpanderAudioProcessorEditor::SpatialExpanderAudioProcessorEditor (
     stretchAttach = std::make_unique<juce::AudioProcessorValueTreeState::SliderAttachment>(
         processor.getAPVTS(), "stretch", stretchSlider);
 
+    preampLabel.setText ("Preamp", juce::dontSendNotification);
+    preampLabel.setJustificationType (juce::Justification::centred);
+    addAndMakeVisible (preampLabel);
+
+    preampSlider.setSliderStyle (juce::Slider::LinearHorizontal);
+    preampSlider.setTextBoxStyle (juce::Slider::TextBoxRight, true, 60, 20);
+    preampSlider.setRange (-6.0, 6.0, 0.1);
+    addAndMakeVisible (preampSlider);
+    preampAttach = std::make_unique<juce::AudioProcessorValueTreeState::SliderAttachment>(
+        processor.getAPVTS(), "preamp", preampSlider);
+    preampSlider.textFromValueFunction = [] (double value) -> juce::String
+    {
+        return juce::String (value, 1) + " dB";
+    };
+    preampSlider.valueFromTextFunction = [] (const juce::String& text) -> double
+    {
+        return text.getDoubleValue();
+    };
+
     rearIsolationButton.setButtonText ("5.1 Rear Channel Isolation");
     rearIsolationButton.setToggleState (true, juce::dontSendNotification);
     addAndMakeVisible (rearIsolationButton);
@@ -99,7 +118,7 @@ SpatialExpanderAudioProcessorEditor::SpatialExpanderAudioProcessorEditor (
 
     updateFormatComboBox();
 
-    setSize (550, 520);
+    setSize (550, 570);
     startTimerHz (4);
 }
 
@@ -133,6 +152,10 @@ void SpatialExpanderAudioProcessorEditor::resized()
     sl = area.removeFromTop (50);
     stretchLabel.setBounds (sl.removeFromLeft (100));
     stretchSlider.setBounds (sl.reduced (5));
+
+    sl = area.removeFromTop (50);
+    preampLabel.setBounds (sl.removeFromLeft (100));
+    preampSlider.setBounds (sl.reduced (5));
 
     sl = area.removeFromTop (30);
     rearIsolationButton.setBounds (sl.reduced (10, 0));

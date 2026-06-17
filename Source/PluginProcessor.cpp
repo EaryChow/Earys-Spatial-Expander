@@ -20,6 +20,8 @@ SpatialExpanderAudioProcessor::SpatialExpanderAudioProcessor()
               juce::NormalisableRange<float> (0.0f, 1.5f, 0.01f), 0.0f),
           std::make_unique<juce::AudioParameterFloat> ("stretch", "Stretch",
               juce::NormalisableRange<float> (0.0f, 1.0f, 0.01f), 1.0f),
+          std::make_unique<juce::AudioParameterFloat> ("preamp", "Preamp",
+              juce::NormalisableRange<float> (-6.0f, 6.0f, 0.1f), 0.0f),
           std::make_unique<juce::AudioParameterBool> ("rearIsolation", "5.1 Rear Channel Isolation", true)
       })
 {
@@ -245,6 +247,11 @@ void SpatialExpanderAudioProcessor::processBlock (juce::AudioBuffer<float>& buff
 
     float lfeCutoff = apvts.getRawParameterValue ("lfeCutoff")->load();
     float lfeLevelDb = apvts.getRawParameterValue ("lfeLevel")->load();
+
+    float preampDb = apvts.getRawParameterValue ("preamp")->load();
+    float preampGain = juce::Decibels::decibelsToGain (preampDb);
+    if (preampGain != 1.0f)
+        buffer.applyGain (preampGain);
 
     if (lfeCutoff != prevLfeCutoff)
     {
@@ -1156,15 +1163,15 @@ void SpatialExpanderAudioProcessor::runCalibration()
     // 4. Process the noise through the temporary STFT
     std::vector<std::vector<float>> calOutputs (numSpecOut, std::vector<float> (calDuration, 0.0f));
 
-    int blockSize = stft.hopSize;
-    for (int pos = 0; pos + blockSize <= calDuration; pos += blockSize)
+    int calHop = stft.hopSize;
+    for (int pos = 0; pos + calHop <= calDuration; pos += calHop)
     {
         std::vector<float*> outPtrs (numSpecOut);
         for (int ch = 0; ch < numSpecOut; ++ch)
             outPtrs[ch] = calOutputs[ch].data() + pos;
 
         calSTFT.process (pinkL.data() + pos, pinkR.data() + pos,
-                         outPtrs.data(), blockSize);
+                         outPtrs.data(), calHop);
     }
 
     // 5. Measure output true peak (skip first fftSize samples = transient)

@@ -48,6 +48,10 @@ private:
     juce::Label stretchLabel;
     std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> stretchAttach;
 
+    juce::Slider preampSlider;
+    juce::Label preampLabel;
+    std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> preampAttach;
+
     juce::ToggleButton rearIsolationButton;
     std::unique_ptr<juce::AudioProcessorValueTreeState::ButtonAttachment> rearIsolationAttach;
 
