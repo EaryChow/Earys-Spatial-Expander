@@ -1107,7 +1107,79 @@ void SpatialExpanderAudioProcessor::runCalibration()
             ? static_cast<float> (std::sqrt (refPower / totalPower)) : 1.0f;
     }
 
-    gainTable = std::move (newTable);
+    // -----------------------------------------------------------------
+    // Second pass: true peak measurement via full STFT pipeline.
+    // Generate 0 dB true peak pink noise, run it through a temporary
+    // STFT with the current cascade + gainTable, measure output peak.
+    // -----------------------------------------------------------------
+
+    // 1. Generate pink noise with 0 dB true peak
+    const int calDuration = stft.fftSize * 8;
+    std::vector<float> pinkL (calDuration), pinkR (calDuration);
+
+    std::mt19937 rng2 (12345);
+    std::uniform_real_distribution<float> white (-1.0f, 1.0f);
+    float accL = 0.0f, accR = 0.0f;
+    const float leak = 0.995f;
+    for (int i = 0; i < calDuration; ++i)
+    {
+        accL = leak * accL + white (rng2);
+        accR = leak * accR + white (rng2);
+        pinkL[i] = accL;
+        pinkR[i] = accR;
+    }
+
+    // Normalize to 0 dB true peak
+    float inputPeak = 0.0f;
+    for (int i = 0; i < calDuration; ++i)
+    {
+        inputPeak = std::max (inputPeak, std::abs (pinkL[i]));
+        inputPeak = std::max (inputPeak, std::abs (pinkR[i]));
+    }
+    float norm = 1.0f / inputPeak;
+    for (int i = 0; i < calDuration; ++i)
+    {
+        pinkL[i] *= norm;
+        pinkR[i] *= norm;
+    }
+
+    // 2. Temporarily install the new table so onFrame uses it
+    gainTable = newTable;
+
+    // 3. Temporary STFT configured identically to the audio-thread one
+    StereoSTFT calSTFT;
+    calSTFT.setWindowSize (stft.fftOrder);
+    calSTFT.setNumOutputs (numSpecOut);
+    calSTFT.prepare (getSampleRate());
+    calSTFT.setFrameListener (this);
+
+    // 4. Process the noise through the temporary STFT
+    std::vector<std::vector<float>> calOutputs (numSpecOut, std::vector<float> (calDuration, 0.0f));
+
+    int blockSize = stft.hopSize;
+    for (int pos = 0; pos + blockSize <= calDuration; pos += blockSize)
+    {
+        std::vector<float*> outPtrs (numSpecOut);
+        for (int ch = 0; ch < numSpecOut; ++ch)
+            outPtrs[ch] = calOutputs[ch].data() + pos;
+
+        calSTFT.process (pinkL.data() + pos, pinkR.data() + pos,
+                         outPtrs.data(), blockSize);
+    }
+
+    // 5. Measure output true peak (skip first fftSize samples = transient)
+    float outputPeak = 0.0f;
+    for (int ch = 0; ch < numSpecOut; ++ch)
+    {
+        for (int i = stft.fftSize; i < calDuration; ++i)
+            outputPeak = std::max (outputPeak, std::abs (calOutputs[ch][i]));
+    }
+
+    // 6. Scale the entire table so the true peak sits at -0.1 dB
+    const float targetPeak = juce::Decibels::decibelsToGain (-0.1f);
+    float globalGain = (outputPeak > 1e-12f) ? (targetPeak / outputPeak) : targetPeak;
+    for (auto& g : gainTable)
+        g *= globalGain;
 }
 
 double SpatialExpanderAudioProcessor::getLatencyMs() const noexcept
