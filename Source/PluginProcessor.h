@@ -118,6 +118,8 @@ private:
     std::vector<float> cascadeRresSave;
     int cascadeFftSize = 0;
 
+    std::atomic<float>* chOffParams[9] = {};
+
     juce::AudioProcessorValueTreeState apvts;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (SpatialExpanderAudioProcessor)

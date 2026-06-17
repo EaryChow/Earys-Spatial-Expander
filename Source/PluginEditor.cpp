@@ -116,7 +116,42 @@ SpatialExpanderAudioProcessorEditor::SpatialExpanderAudioProcessorEditor (
     warningLabel.setJustificationType (juce::Justification::centred);
     addAndMakeVisible (warningLabel);
 
+    // Advanced panel
+    advancedToggle.setButtonText ("Advanced");
+    advancedToggle.setToggleState (false, juce::dontSendNotification);
+    addAndMakeVisible (advancedToggle);
+    advancedToggle.onClick = [this] { updateAdvancedPanel(); };
+
+    advancedInfoLabel.setText ("For content-level balancing only. Room and speaker calibration should be done in your receiver or audio interface.", juce::dontSendNotification);
+    advancedInfoLabel.setFont (juce::Font (juce::FontOptions (11.0f)));
+    advancedInfoLabel.setJustificationType (juce::Justification::centred);
+    advancedInfoLabel.setColour (juce::Label::textColourId, juce::Colours::grey);
+
+    const char* chNames[] = { "Center", "Front L", "Front R", "Wide L", "Wide R", "Side L", "Side R", "Rear L", "Rear R" };
+    const char* chParamIds[] = { "chOffC", "chOffFL", "chOffFR", "chOffWL", "chOffWR", "chOffSL", "chOffSR", "chOffRL", "chOffRR" };
+
+    for (int i = 0; i < numChOff; ++i)
+    {
+        auto& sld = chOffSliders[i];
+        sld.setSliderStyle (juce::Slider::LinearHorizontal);
+        sld.setTextBoxStyle (juce::Slider::TextBoxRight, true, 50, 20);
+        sld.setRange (-12.0, 12.0, 0.1);
+        sld.textFromValueFunction = [] (double v) { return juce::String (v, 1) + " dB"; };
+        sld.valueFromTextFunction = [] (const juce::String& t) { return t.getDoubleValue(); };
+
+        auto& lbl = chOffLabels[i];
+        lbl.setText (chNames[i], juce::dontSendNotification);
+        lbl.setJustificationType (juce::Justification::centred);
+
+        chOffAttachments[i] = std::make_unique<juce::AudioProcessorValueTreeState::SliderAttachment>(
+            processor.getAPVTS(), chParamIds[i], sld);
+
+        addAndMakeVisible (lbl);
+        addAndMakeVisible (sld);
+    }
+
     updateFormatComboBox();
+    updateAdvancedPanel();
 
     setSize (550, 570);
     startTimerHz (4);
@@ -125,6 +160,47 @@ SpatialExpanderAudioProcessorEditor::SpatialExpanderAudioProcessorEditor (
 SpatialExpanderAudioProcessorEditor::~SpatialExpanderAudioProcessorEditor()
 {
     stopTimer();
+}
+
+void SpatialExpanderAudioProcessorEditor::updateAdvancedPanel()
+{
+    bool show = advancedToggle.getToggleState();
+
+    int numSpecOut = processor.getNumSpectralOutputs();
+    bool hasRear  = numSpecOut > 3;
+    bool hasSide  = numSpecOut > 5;
+    bool hasWide  = numSpecOut > 7;
+
+    bool visible[9];
+    for (int i = 0; i < 3; ++i) visible[i] = show;           // Center, Front L/R
+    visible[3] = show && hasWide;
+    visible[4] = show && hasWide;
+    visible[5] = show && hasSide;
+    visible[6] = show && hasSide;
+    visible[7] = show && hasRear;
+    visible[8] = show && hasRear;
+
+    advancedInfoLabel.setVisible (show);
+
+    for (int i = 0; i < numChOff; ++i)
+    {
+        chOffLabels[i].setVisible (visible[i]);
+        chOffSliders[i].setVisible (visible[i]);
+    }
+
+    // Resize window to fit
+    if (show)
+    {
+        int extraRows = 0;
+        for (int i = 0; i < numChOff; ++i)
+            if (visible[i]) ++extraRows;
+        int newH = 570 + 24 + static_cast<int> (advancedInfoLabel.getFont().getHeight()) + 6 + extraRows * 34 + 10;
+        setSize (550, newH);
+    }
+    else
+    {
+        setSize (550, 570);
+    }
 }
 
 void SpatialExpanderAudioProcessorEditor::paint (juce::Graphics& g)
@@ -168,6 +244,25 @@ void SpatialExpanderAudioProcessorEditor::resized()
     latencyLabel.setBounds (latArea.removeFromTop (20));
     latencyComboBox.setBounds (latArea.reduced (60, 0));
 
+    // Advanced panel
+    auto advArea = area.removeFromTop (24);
+    advancedToggle.setBounds (advArea.reduced (60, 0));
+
+    if (advancedToggle.getToggleState())
+    {
+        auto infoArea = area.removeFromTop (static_cast<int> (advancedInfoLabel.getFont().getHeight()) + 6);
+        advancedInfoLabel.setBounds (infoArea.reduced (10, 0));
+
+        for (int i = 0; i < numChOff; ++i)
+        {
+            if (!chOffSliders[i].isVisible())
+                continue;
+            auto row = area.removeFromTop (34);
+            chOffLabels[i].setBounds (row.removeFromLeft (100));
+            chOffSliders[i].setBounds (row.reduced (5));
+        }
+    }
+
     warningLabel.setBounds (area.reduced (10, 0));
 }
 
@@ -191,9 +286,17 @@ void SpatialExpanderAudioProcessorEditor::timerCallback()
     }
 
     // Disable Stretch control in 3.1 mode
-    bool enableStretch = processor.getNumSpectralOutputs() > 3;
+    int numSpecOut = processor.getNumSpectralOutputs();
+    bool enableStretch = numSpecOut > 3;
     stretchSlider.setEnabled (enableStretch);
     stretchLabel.setEnabled (enableStretch);
+
+    // Refresh advanced panel if format changed while open
+    if (advancedToggle.getToggleState() && numSpecOut != lastDetectedFormat)
+    {
+        lastDetectedFormat = numSpecOut;
+        updateAdvancedPanel();
+    }
 }
 
 void SpatialExpanderAudioProcessorEditor::updateFormatComboBox()

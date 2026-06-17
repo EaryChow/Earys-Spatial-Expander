@@ -55,6 +55,17 @@ private:
     juce::ToggleButton rearIsolationButton;
     std::unique_ptr<juce::AudioProcessorValueTreeState::ButtonAttachment> rearIsolationAttach;
 
+    static constexpr int numChOff = 9;
+
+    juce::ToggleButton advancedToggle;
+    juce::Label advancedInfoLabel;
+
+    juce::Slider chOffSliders[numChOff];
+    juce::Label chOffLabels[numChOff];
+    std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> chOffAttachments[numChOff];
+
+    void updateAdvancedPanel();
+
     juce::Label warningLabel;
 
     int lastDetectedFormat = -1;

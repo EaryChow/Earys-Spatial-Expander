@@ -22,7 +22,25 @@ SpatialExpanderAudioProcessor::SpatialExpanderAudioProcessor()
               juce::NormalisableRange<float> (0.0f, 1.0f, 0.01f), 1.0f),
           std::make_unique<juce::AudioParameterFloat> ("preamp", "Preamp",
               juce::NormalisableRange<float> (-6.0f, 6.0f, 0.1f), 0.0f),
-          std::make_unique<juce::AudioParameterBool> ("rearIsolation", "5.1 Rear Channel Isolation", true)
+          std::make_unique<juce::AudioParameterBool> ("rearIsolation", "5.1 Rear Channel Isolation", true),
+          std::make_unique<juce::AudioParameterFloat> ("chOffC", "Center Offset",
+              juce::NormalisableRange<float> (-12.0f, 12.0f, 0.1f), 0.0f),
+          std::make_unique<juce::AudioParameterFloat> ("chOffFL", "Front L Offset",
+              juce::NormalisableRange<float> (-12.0f, 12.0f, 0.1f), 0.0f),
+          std::make_unique<juce::AudioParameterFloat> ("chOffFR", "Front R Offset",
+              juce::NormalisableRange<float> (-12.0f, 12.0f, 0.1f), 0.0f),
+          std::make_unique<juce::AudioParameterFloat> ("chOffWL", "Wide L Offset",
+              juce::NormalisableRange<float> (-12.0f, 12.0f, 0.1f), 0.0f),
+          std::make_unique<juce::AudioParameterFloat> ("chOffWR", "Wide R Offset",
+              juce::NormalisableRange<float> (-12.0f, 12.0f, 0.1f), 0.0f),
+          std::make_unique<juce::AudioParameterFloat> ("chOffSL", "Side L Offset",
+              juce::NormalisableRange<float> (-12.0f, 12.0f, 0.1f), 0.0f),
+          std::make_unique<juce::AudioParameterFloat> ("chOffSR", "Side R Offset",
+              juce::NormalisableRange<float> (-12.0f, 12.0f, 0.1f), 0.0f),
+          std::make_unique<juce::AudioParameterFloat> ("chOffRL", "Rear L Offset",
+              juce::NormalisableRange<float> (-12.0f, 12.0f, 0.1f), 0.0f),
+          std::make_unique<juce::AudioParameterFloat> ("chOffRR", "Rear R Offset",
+              juce::NormalisableRange<float> (-12.0f, 12.0f, 0.1f), 0.0f)
       })
 {
     stft.setFrameListener (this);
@@ -189,6 +207,11 @@ void SpatialExpanderAudioProcessor::prepareToPlay (double sampleRate, int sample
     chLFE.resize (samplesPerBlock, 0.0f);
 
     prevLfeCutoff = cutoff;
+
+    // Cache channel offset parameter pointers
+    static constexpr const char* chOffIds[] = { "chOffC", "chOffFL", "chOffFR", "chOffWL", "chOffWR", "chOffSL", "chOffSR", "chOffRL", "chOffRR" };
+    for (int i = 0; i < 9; ++i)
+        chOffParams[i] = apvts.getRawParameterValue (chOffIds[i]);
 
     // Pre-allocate cascade scratch buffers for audio-thread safety
     cascadeFftSize = stft.fftSize;
@@ -665,6 +688,11 @@ void SpatialExpanderAudioProcessor::handleAsyncUpdate()
         for (int ch = 0; ch < numSpecOut; ++ch)
             chOutputPtrs[ch] = chOutputs[ch].data();
 
+        // Refresh channel offset param pointers on reconfiguration
+        static constexpr const char* chOffIds[] = { "chOffC", "chOffFL", "chOffFR", "chOffWL", "chOffWR", "chOffSL", "chOffSR", "chOffRL", "chOffRR" };
+        for (int i = 0; i < 9; ++i)
+            chOffParams[i] = apvts.getRawParameterValue (chOffIds[i]);
+
         // Resize cascade buffers
         cascadeFftSize = fftSize;
         cascadeCenter.assign (fftSize, 0.0f);
@@ -926,6 +954,42 @@ void SpatialExpanderAudioProcessor::onFrame (const float* fftL, const float* fft
         }
         applyGain (cascadeRearL.data(), fftSize);
         applyGain (cascadeRearR.data(), fftSize);
+    }
+
+    // Channel Offsets (post-calibration per-channel gain)
+    {
+        float* bufMap[9] = {};
+        if (numSpecOut <= 3)
+        {
+            bufMap[0] = cascadeCenter.data(); bufMap[1] = cascadeFrontL.data(); bufMap[2] = cascadeFrontR.data();
+        }
+        else if (numSpecOut <= 5)
+        {
+            bufMap[0] = cascadeCenter.data(); bufMap[1] = cascadeFrontL.data(); bufMap[2] = cascadeFrontR.data();
+            bufMap[3] = cascadeRearL.data();  bufMap[4] = cascadeRearR.data();
+        }
+        else if (numSpecOut <= 7)
+        {
+            bufMap[0] = cascadeCenter.data(); bufMap[1] = cascadeFrontL.data(); bufMap[2] = cascadeFrontR.data();
+            bufMap[3] = cascadeSideL.data();  bufMap[4] = cascadeSideR.data();
+            bufMap[5] = cascadeRearL.data();  bufMap[6] = cascadeRearR.data();
+        }
+        else
+        {
+            bufMap[0] = cascadeCenter.data(); bufMap[1] = cascadeFrontL.data(); bufMap[2] = cascadeFrontR.data();
+            bufMap[3] = cascadeWideL.data();  bufMap[4] = cascadeWideR.data();
+            bufMap[5] = cascadeSideL.data();  bufMap[6] = cascadeSideR.data();
+            bufMap[7] = cascadeRearL.data();  bufMap[8] = cascadeRearR.data();
+        }
+        for (int ch = 0; ch < numSpecOut; ++ch)
+        {
+            float offsetDb = chOffParams[ch]->load();
+            if (std::abs (offsetDb) >= 0.01f)
+            {
+                float gain = juce::Decibels::decibelsToGain (offsetDb);
+                juce::FloatVectorOperations::multiply (bufMap[ch], gain, fftSize);
+            }
+        }
     }
 
     // Write to output buffers
