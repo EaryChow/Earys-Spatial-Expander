@@ -48,7 +48,7 @@ SpatialExpanderAudioProcessorEditor::SpatialExpanderAudioProcessorEditor (
     formatLabel.setJustificationType (juce::Justification::centred);
     addAndMakeVisible (formatLabel);
 
-    formatComboBox.addItemList ({ "Auto", "3.0", "5.1", "7.1", "9.1 (in 9.1.6)" }, 1);
+    formatComboBox.addItemList ({ "Auto", "3.0", "5.1", "7.1", "9.1" }, 1);
     formatComboBox.setSelectedId (1);
     addAndMakeVisible (formatComboBox);
     formatAttach = std::make_unique<juce::AudioProcessorValueTreeState::ComboBoxAttachment>(
@@ -176,15 +176,20 @@ void SpatialExpanderAudioProcessorEditor::timerCallback()
 void SpatialExpanderAudioProcessorEditor::updateFormatComboBox()
 {
     auto busName = processor.getCurrentBusFormatName();
-    auto currentId = formatComboBox.getSelectedId();
 
-    formatComboBox.clear (juce::dontSendNotification);
-    formatComboBox.addItem ("Auto (" + busName + ")", 1);
-    formatComboBox.addItem ("3.0", 2);
-    formatComboBox.addItem ("5.1", 3);
-    formatComboBox.addItem ("7.1", 4);
-    formatComboBox.addItem ("9.1 (in 9.1.6)", 5);
-    formatComboBox.setSelectedId (currentId, juce::dontSendNotification);
+    if (formatComboBox.getNumItems() == 0 ||
+        ! formatComboBox.getItemText (0).contains (busName))
+    {
+        auto currentId = formatComboBox.getSelectedId();
+
+        formatComboBox.clear (juce::dontSendNotification);
+        formatComboBox.addItem ("Auto (" + busName + ")", 1);
+        formatComboBox.addItem ("3.0", 2);
+        formatComboBox.addItem ("5.1", 3);
+        formatComboBox.addItem ("7.1", 4);
+        formatComboBox.addItem ("9.1", 5);
+        formatComboBox.setSelectedId (currentId, juce::dontSendNotification);
+    }
 }
 
 void SpatialExpanderAudioProcessorEditor::updateLatencyComboBox()

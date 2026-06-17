@@ -51,19 +51,24 @@ public:
     enum OutputFormat { Auto = 0, Fmt30, Fmt51, Fmt71, Fmt916 };
 
 private:
+    int detectFormatFromBus() const noexcept;
+
     void onFrame (const float* fftL, const float* fftR,
                   float** fftOutputs, int numOutputs,
                   int fftSize) override;
 
     void doCascade (const float* fftL, const float* fftR,
                     float* fftCenter, float* fftFrontL, float* fftFrontR,
+                    float* fftWideL, float* fftWideR,
                     float* fftSideL, float* fftSideR,
                     float* fftRearL, float* fftRearR,
-                    float* fftTemp, int fftSize);
+                    float* fftTemp, int fftSize, int numSpecOut);
 
     void applyStretch (float* fftCenter, float* fftFrontL, float* fftFrontR,
+                       float* fftWideL, float* fftWideR,
                        float* fftSideL, float* fftSideR,
-                       float* fftRearL, float* fftRearR, int fftSize, float stretch);
+                       float* fftRearL, float* fftRearR,
+                       int fftSize, float stretch, int numSpecOut);
 
     void parameterChanged (const juce::String& parameterID, float newValue) override;
     void handleAsyncUpdate() override;
@@ -72,6 +77,7 @@ private:
     enum class CalState : int { Normal, FadingOut, Reconfiguring, FadingIn };
 
     std::atomic<int> pendingWindowOrder { 0 };
+    std::atomic<bool> pendingFormatChange { false };
     std::atomic<CalState> calState { CalState::Normal };
     std::atomic<int> fadeSamplesLeft { 0 };
     int fadeSamplesTotal = 0;
@@ -101,6 +107,8 @@ private:
     std::vector<float> cascadeCenter;
     std::vector<float> cascadeFrontL;
     std::vector<float> cascadeFrontR;
+    std::vector<float> cascadeWideL;
+    std::vector<float> cascadeWideR;
     std::vector<float> cascadeSideL;
     std::vector<float> cascadeSideR;
     std::vector<float> cascadeRearL;

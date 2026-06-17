@@ -13,7 +13,7 @@ SpatialExpanderAudioProcessor::SpatialExpanderAudioProcessor()
           std::make_unique<juce::AudioParameterFloat> ("lfeLevel", "LFE Level",
               juce::NormalisableRange<float> (-12.1f, 12.0f, 0.1f), 0.0f),
           std::make_unique<juce::AudioParameterChoice> ("outputFormat", "Output Format",
-              juce::StringArray { "Auto", "3.0", "5.1", "7.1", "9.1 (in 9.1.6)" }, 0),
+              juce::StringArray { "Auto", "3.0", "5.1", "7.1", "9.1" }, 0),
           std::make_unique<juce::AudioParameterChoice> ("latency", "Latency",
               juce::StringArray { "512", "1024", "2048" }, 1),
           std::make_unique<juce::AudioParameterFloat> ("leakCenter", "Leak Center",
@@ -25,6 +25,7 @@ SpatialExpanderAudioProcessor::SpatialExpanderAudioProcessor()
 {
     stft.setFrameListener (this);
     apvts.addParameterListener ("latency", this);
+    apvts.addParameterListener ("outputFormat", this);
 
     gainTable.resize (ildTableSize, 1.0f);
 }
@@ -38,42 +39,101 @@ const juce::String SpatialExpanderAudioProcessor::getName() const
 
 bool SpatialExpanderAudioProcessor::isBusesLayoutSupported (const BusesLayout& layouts) const
 {
-    auto inSize = layouts.getMainInputChannelSet().size();
-    auto outSize = layouts.getMainOutputChannelSet().size();
+    auto inLayout = layouts.getMainInputChannelSet();
+    auto outLayout = layouts.getMainOutputChannelSet();
+    auto inSize = inLayout.size();
+    auto outSize = outLayout.size();
 
     if (inSize < 2 || outSize < 2)
         return false;
 
-    auto out = layouts.getMainOutputChannelSet();
-    if (out == juce::AudioChannelSet::stereo() ||
-        out == juce::AudioChannelSet::createLCR() ||
-        out == juce::AudioChannelSet::create5point1() ||
-        out == juce::AudioChannelSet::create7point1() ||
-        out == juce::AudioChannelSet::create9point1point6())
+    // Standard DAWs force input == output on the same track/bus.
+    if (inLayout == outLayout)
         return true;
 
-    if (out.size() >= 4 && out.isDiscreteLayout())
+    // Hosts often use discrete/custom channel sets for surround that don't
+    // exactly match JUCE's named layouts. Accept same channel count.
+    if (inSize == outSize)
         return true;
 
-    return false;
+    // For node-based hosts that allow independent I/O (e.g. Cantabile).
+    if (inLayout == juce::AudioChannelSet::stereo())
+        return true;
+
+    // Fallback: accept any layout with at least stereo input and output.
+    // We only read input channels 0-1 (L/R) and explicitly map all outputs
+    // via channelMap, so any channel count is safe.
+    return true;
+}
+
+int SpatialExpanderAudioProcessor::detectFormatFromBus() const noexcept
+{
+    auto output = getBus (false, 0);
+    if (output == nullptr) return Fmt30;
+
+    auto layout = output->getCurrentLayout();
+    int n = layout.size();
+
+    if (n <= 2) return Fmt30;
+    if (n <= 4) return Fmt30;
+
+    bool hasWide = false;
+    bool hasSide = false;
+    bool hasRear = false;
+    bool hasGenericSurround = false;
+
+    for (int ch = 0; ch < n; ++ch)
+    {
+        auto type = layout.getTypeOfChannel (ch);
+        if (type == juce::AudioChannelSet::wideLeft || type == juce::AudioChannelSet::wideRight ||
+            type == juce::AudioChannelSet::leftCentre || type == juce::AudioChannelSet::rightCentre)
+            hasWide = true;
+        else if (type == juce::AudioChannelSet::leftSurroundSide || type == juce::AudioChannelSet::rightSurroundSide)
+            hasSide = true;
+        else if (type == juce::AudioChannelSet::leftSurroundRear || type == juce::AudioChannelSet::rightSurroundRear)
+            hasRear = true;
+        else if (type == juce::AudioChannelSet::leftSurround || type == juce::AudioChannelSet::rightSurround)
+            hasGenericSurround = true;
+    }
+
+    // 9.1.x: wide channels present (aliases catch ITU leftCentre too)
+    if (hasWide) return Fmt916;
+
+    // 7.1.x: BOTH side and rear specific types must be present.
+    // A single specific type (e.g. leftSurroundSide only) is treated as 5.1
+    // to avoid misclassifying 5.1.2/5.1.4 where the DAW uses non-standard naming.
+    if (hasSide && hasRear) return Fmt71;
+
+    // 5.1.x: generic surround present with no side/rear distinction.
+    // Extra channels are assumed to be height/top.
+    if (hasGenericSurround && !hasSide && !hasRear) return Fmt51;
+
+    // If only one specific surround type is present (and no generic),
+    // default to 5.1 for safety — don't generate unused 7.1 spectral channels.
+    if ((hasSide || hasRear) && !hasGenericSurround) return Fmt51;
+
+    // Named layout fallbacks for hosts that use standard JUCE layouts
+    if (layout == juce::AudioChannelSet::create9point1point6()) return Fmt916;
+    if (layout == juce::AudioChannelSet::create7point1())       return Fmt71;
+    if (layout == juce::AudioChannelSet::create5point1())       return Fmt51;
+    if (layout == juce::AudioChannelSet::createLCR())           return Fmt30;
+
+    // Discrete / unknown layout fallbacks by channel count.
+    // Conservative: prefer smaller bed formats to avoid generating
+    // spectral channels that have no physical destination.
+    if (n >= 16) return Fmt916;  // 9.1.6
+    if (n >= 14) return Fmt916;  // 9.1.4 (or 7.1.6 — 9.1 is the more common 14-ch bed)
+    if (n >= 12) return Fmt71;   // 7.1.4 or 9.1.2
+    if (n >= 10) return Fmt71;   // 7.1.2 or 9.1.0
+    if (n >= 8)  return Fmt51;   // 5.1.2 or 7.1 — prefer 5.1 (safer default)
+    if (n >= 6)  return Fmt51;
+    return Fmt30;
 }
 
 int SpatialExpanderAudioProcessor::getNumSpectralOutputs() const noexcept
 {
     int fmt = static_cast<int> (apvts.getRawParameterValue ("outputFormat")->load());
-
-    auto output = getBus (false, 0);
-    int busCh = (output != nullptr) ? output->getCurrentLayout().size() : 0;
-
-    int effective = fmt;
-    if (fmt == Auto)
-    {
-        if (busCh <= 2)       effective = Fmt30;
-        else if (busCh <= 4)  effective = Fmt30;
-        else if (busCh <= 6)  effective = Fmt51;
-        else if (busCh <= 8)  effective = Fmt71;
-        else                  effective = Fmt916;
-    }
+    int effective = (fmt == Auto) ? detectFormatFromBus() : fmt;
 
     switch (effective)
     {
@@ -134,6 +194,8 @@ void SpatialExpanderAudioProcessor::prepareToPlay (double sampleRate, int sample
     cascadeCenter.assign (cs, 0.0f);
     cascadeFrontL.assign (cs, 0.0f);
     cascadeFrontR.assign (cs, 0.0f);
+    cascadeWideL.assign (cs, 0.0f);
+    cascadeWideR.assign (cs, 0.0f);
     cascadeSideL.assign (cs, 0.0f);
     cascadeSideR.assign (cs, 0.0f);
     cascadeRearL.assign (cs, 0.0f);
@@ -157,6 +219,17 @@ void SpatialExpanderAudioProcessor::processBlock (juce::AudioBuffer<float>& buff
     auto numSamples = buffer.getNumSamples();
     auto numInChannels  = buffer.getNumChannels();
     auto numOutChannels = buffer.getNumChannels();
+
+    int expectedSpecOut = getNumSpectralOutputs();
+    if (static_cast<int> (chOutputs.size()) != expectedSpecOut ||
+        stft.numOutputs != expectedSpecOut)
+    {
+        if (calState.load() == CalState::Normal)
+        {
+            pendingFormatChange.store (true);
+            triggerAsyncUpdate();
+        }
+    }
 
     auto state = calState.load();
 
@@ -217,114 +290,255 @@ void SpatialExpanderAudioProcessor::processBlock (juce::AudioBuffer<float>& buff
         }
     }
 
-    // Determine surround channel indices from bus layout
+    // -----------------------------------------------------------------
+    // Hybrid routing: type-based primary with comprehensive aliases,
+    // index-based fallback for unknown/discrete channels.
+    //
+    // Comprehensive alias system:
+    //   WideL:  wideLeft (Atmos), leftCentre (ITU), leftSurround (last resort)
+    //   WideR:  wideRight (Atmos), rightCentre (ITU), rightSurround (last resort)
+    //   SideL:  leftSurroundSide (Atmos Lss), leftSurround (ITU Ls/generic),
+    //           leftSurroundRear (DAWs that swap side/rear naming)
+    //   SideR:  rightSurroundSide, rightSurround, rightSurroundRear
+    //   RearL:  leftSurroundRear (Atmos Lsr), leftSurround (ITU/generic),
+    //           leftSurroundSide (DAWs that swap side/rear naming)
+    //   RearR:  rightSurroundRear, rightSurround, rightSurroundSide
+    //
+    // Index fallback for 16-ch (user's DAW buffer order):
+    //   0-3:  L R C LFE
+    //   4-5:  RearL/R  (swapped - confirmed by user testing)
+    //   6-7:  SideL/R  (swapped - confirmed by user testing)
+    //   8-9:  WideL/R
+    //   10+:  top channels (unmapped)
+    // -----------------------------------------------------------------
     auto outputBus = getBus (false, 0);
     auto outputLayout = (outputBus != nullptr) ? outputBus->getCurrentLayout() : juce::AudioChannelSet();
-    int surroundLIdx = -1, surroundRIdx = -1;
+    numOutChannels = buffer.getNumChannels();
+    numSpecOut = static_cast<int> (chOutputs.size());
 
-    if (numSpecOut > 3)
+    bool is3_0 = (numSpecOut <= 3);
+    bool is5_1 = (numSpecOut > 3 && numSpecOut <= 5);
+    bool is7_1 = (numSpecOut > 5 && numSpecOut <= 7);
+    bool is9_1 = (numSpecOut > 7);
+
+    float lfeGain = (lfeLevelDb >= -12.0f) ? juce::Decibels::decibelsToGain (lfeLevelDb) : 0.0f;
+
+    std::vector<int> channelMap (numOutChannels, -1);
+    std::vector<bool> channelIsLFE (numOutChannels, false);
+
+    // Step 1: Front channels & LFE (type is reliable, index fallback for discrete)
+    for (int ch = 0; ch < numOutChannels; ++ch)
     {
-        // Prefer Rear Surround (Lrs/Rrs) when available; fall back to Side Surround (Ls/Rs)
-        int idx;
-        idx = outputLayout.getChannelIndexForType (juce::AudioChannelSet::leftSurroundRear);
-        if (idx < 0) idx = outputLayout.getChannelIndexForType (juce::AudioChannelSet::leftSurround);
-        surroundLIdx = idx;
+        auto type = outputLayout.getTypeOfChannel (ch);
 
-        idx = outputLayout.getChannelIndexForType (juce::AudioChannelSet::rightSurroundRear);
-        if (idx < 0) idx = outputLayout.getChannelIndexForType (juce::AudioChannelSet::rightSurround);
-        surroundRIdx = idx;
-
-        // Fallback for discrete/unknown layouts: assume ch4/5 are surround
-        if (surroundLIdx < 0 && numOutChannels > 4) surroundLIdx = 4;
-        if (surroundRIdx < 0 && numOutChannels > 5) surroundRIdx = 5;
+        if (type == juce::AudioChannelSet::left || (type == juce::AudioChannelSet::unknown && ch == 0))
+            channelMap[ch] = 1;
+        else if (type == juce::AudioChannelSet::right || (type == juce::AudioChannelSet::unknown && ch == 1))
+            channelMap[ch] = 2;
+        else if (type == juce::AudioChannelSet::centre || (type == juce::AudioChannelSet::unknown && ch == 2))
+            channelMap[ch] = 0;
+        else if (type == juce::AudioChannelSet::LFE || (type == juce::AudioChannelSet::unknown && ch == 3))
+            channelIsLFE[ch] = true;
     }
 
-    // Route spectral outputs to audio buffer channels
-    // 3.0 mode: chOutputs = [Center, Lres, Rres] -> L, R, C
-    // 5.1 mode: chOutputs = [Center, FrontL, FrontR, RearL, RearR] -> L, R, C, LFE, surroundL, surroundR
-    int maxUsedCh = 3;
-
-    if (numOutChannels > 0)
-        juce::FloatVectorOperations::copy (buffer.getWritePointer (0), chOutputs[1].data(), numSamples);
-    if (numOutChannels > 1)
-        juce::FloatVectorOperations::copy (buffer.getWritePointer (1), chOutputs[2].data(), numSamples);
-    if (numOutChannels > 2)
+    // Step 2: Type-based assignment with comprehensive aliases
+    auto isOutputTaken = [&](int output) -> bool
     {
-        juce::FloatVectorOperations::copy (buffer.getWritePointer (2), chOutputs[0].data(), numSamples);
-        maxUsedCh = 3;
-    }
+        for (int c = 0; c < numOutChannels; ++c)
+            if (channelMap[c] == output) return true;
+        return false;
+    };
 
-    // LFE channel (always ch3 for standard layouts)
-    if (numOutChannels > 3)
+    auto findChannelByType = [&](juce::AudioChannelSet::ChannelType type) -> int
     {
-        if (lfeLevelDb >= -12.0f)
+        for (int ch = 0; ch < numOutChannels; ++ch)
         {
-            float gain = juce::Decibels::decibelsToGain (lfeLevelDb);
-            for (int i = 0; i < numSamples; ++i)
-                buffer.getWritePointer (3)[i] = chLFE[i] * gain;
+            if (channelMap[ch] >= 0 || channelIsLFE[ch]) continue;
+            if (outputLayout.getTypeOfChannel (ch) == type) return ch;
+        }
+        return -1;
+    };
+
+    struct RoleCandidate
+    {
+        int spectralOutput;
+        std::vector<juce::AudioChannelSet::ChannelType> types;
+    };
+
+    std::vector<RoleCandidate> candidates;
+
+    if (is9_1)
+    {
+        candidates.push_back ({3, {juce::AudioChannelSet::wideLeft, juce::AudioChannelSet::leftCentre}});
+        candidates.push_back ({4, {juce::AudioChannelSet::wideRight, juce::AudioChannelSet::rightCentre}});
+        candidates.push_back ({5, {juce::AudioChannelSet::leftSurroundSide, juce::AudioChannelSet::leftSurround}});
+        candidates.push_back ({6, {juce::AudioChannelSet::rightSurroundSide, juce::AudioChannelSet::rightSurround}});
+        candidates.push_back ({7, {juce::AudioChannelSet::leftSurroundRear, juce::AudioChannelSet::leftSurround}});
+        candidates.push_back ({8, {juce::AudioChannelSet::rightSurroundRear, juce::AudioChannelSet::rightSurround}});
+    }
+    else if (is7_1)
+    {
+        candidates.push_back ({3, {juce::AudioChannelSet::leftSurroundSide, juce::AudioChannelSet::leftSurround}});
+        candidates.push_back ({4, {juce::AudioChannelSet::rightSurroundSide, juce::AudioChannelSet::rightSurround}});
+        candidates.push_back ({5, {juce::AudioChannelSet::leftSurroundRear, juce::AudioChannelSet::leftSurround}});
+        candidates.push_back ({6, {juce::AudioChannelSet::rightSurroundRear, juce::AudioChannelSet::rightSurround}});
+    }
+    else if (is5_1)
+    {
+        candidates.push_back ({3, {juce::AudioChannelSet::leftSurroundRear, juce::AudioChannelSet::leftSurround, juce::AudioChannelSet::leftSurroundSide}});
+        candidates.push_back ({4, {juce::AudioChannelSet::rightSurroundRear, juce::AudioChannelSet::rightSurround, juce::AudioChannelSet::rightSurroundSide}});
+    }
+
+    // Pass 1: specific types (first in each list)
+    for (const auto& role : candidates)
+    {
+        if (role.spectralOutput >= numSpecOut) continue;
+        if (isOutputTaken (role.spectralOutput)) continue;
+        if (role.types.empty()) continue;
+
+        int ch = findChannelByType (role.types[0]);
+        if (ch >= 0) channelMap[ch] = role.spectralOutput;
+    }
+
+    // Pass 2: generic fallback types (second in each list)
+    for (const auto& role : candidates)
+    {
+        if (role.spectralOutput >= numSpecOut) continue;
+        if (isOutputTaken (role.spectralOutput)) continue;
+        if (role.types.size() < 2) continue;
+
+        int ch = findChannelByType (role.types[1]);
+        if (ch >= 0) channelMap[ch] = role.spectralOutput;
+    }
+
+    // Pass 3: last-resort aliases (third in each list)
+    for (const auto& role : candidates)
+    {
+        if (role.spectralOutput >= numSpecOut) continue;
+        if (isOutputTaken (role.spectralOutput)) continue;
+        if (role.types.size() < 3) continue;
+
+        int ch = findChannelByType (role.types[2]);
+        if (ch >= 0) channelMap[ch] = role.spectralOutput;
+    }
+
+    // Step 3: Index-based fallback for unknown/discrete channels ONLY
+    auto isUnmappedDiscrete = [&](int ch) -> bool
+    {
+        return channelMap[ch] < 0 && !channelIsLFE[ch]
+            && outputLayout.getTypeOfChannel(ch) == juce::AudioChannelSet::unknown;
+    };
+
+    if (numOutChannels == 6)
+    {
+        if (is5_1 && isUnmappedDiscrete(4)) channelMap[4] = 3;
+        if (is5_1 && isUnmappedDiscrete(5)) channelMap[5] = 4;
+    }
+    else if (numOutChannels == 8)
+    {
+        if (is7_1)
+        {
+            if (isUnmappedDiscrete(4)) channelMap[4] = 3;
+            if (isUnmappedDiscrete(5)) channelMap[5] = 4;
+            if (isUnmappedDiscrete(6)) channelMap[6] = 5;
+            if (isUnmappedDiscrete(7)) channelMap[7] = 6;
+        }
+        else if (is5_1)
+        {
+            if (isUnmappedDiscrete(6)) channelMap[6] = 3;
+            if (isUnmappedDiscrete(7)) channelMap[7] = 4;
+        }
+    }
+    else if (numOutChannels >= 10)   // Any 9.1.x bus: 9.1.0 (10ch), 9.1.2 (12ch), 9.1.4 (14ch), 9.1.6 (16ch)
+    {
+        // Standard JUCE/Atmos bed order: L R C LFE Lss Rss Lsr Rsr Lw Rw
+        // Top/height channels appended at index 10+ remain silent.
+        if (is9_1)
+        {
+            if (isUnmappedDiscrete(4)) channelMap[4] = 5;   // SideL  -> Lss
+            if (isUnmappedDiscrete(5)) channelMap[5] = 6;   // SideR  -> Rss
+            if (isUnmappedDiscrete(6)) channelMap[6] = 7;   // RearL  -> Lsr
+            if (isUnmappedDiscrete(7)) channelMap[7] = 8;   // RearR  -> Rsr
+            if (isUnmappedDiscrete(8)) channelMap[8] = 3;   // WideL  -> Lw
+            if (isUnmappedDiscrete(9)) channelMap[9] = 4;   // WideR  -> Rw
+        }
+        else if (is7_1)
+        {
+            if (isUnmappedDiscrete(4)) channelMap[4] = 3;   // SideL  -> Lss
+            if (isUnmappedDiscrete(5)) channelMap[5] = 4;   // SideR  -> Rss
+            if (isUnmappedDiscrete(6)) channelMap[6] = 5;   // RearL  -> Lsr
+            if (isUnmappedDiscrete(7)) channelMap[7] = 6;   // RearR  -> Rsr
+        }
+        else if (is5_1)
+        {
+            // 5.1 surrounds should be the rear channels
+            if (isUnmappedDiscrete(6)) channelMap[6] = 3;   // RearL  -> Lsr
+            if (isUnmappedDiscrete(7)) channelMap[7] = 4;   // RearR  -> Rsr
+        }
+    }
+    else
+    {
+        // Unknown bus size: type-based fallback of last resort
+        for (int ch = 0; ch < numOutChannels; ++ch)
+        {
+            if (channelMap[ch] >= 0 || channelIsLFE[ch]) continue;
+            auto type = outputLayout.getTypeOfChannel (ch);
+
+            if (type == juce::AudioChannelSet::wideLeft && is9_1)
+                channelMap[ch] = 3;
+            else if (type == juce::AudioChannelSet::wideRight && is9_1)
+                channelMap[ch] = 4;
+            else if (type == juce::AudioChannelSet::leftSurroundSide || type == juce::AudioChannelSet::leftSurround)
+            {
+                if (is9_1)      channelMap[ch] = 5;
+                else if (is7_1) channelMap[ch] = 3;
+                else if (is5_1) channelMap[ch] = 3;
+            }
+            else if (type == juce::AudioChannelSet::rightSurroundSide || type == juce::AudioChannelSet::rightSurround)
+            {
+                if (is9_1)      channelMap[ch] = 6;
+                else if (is7_1) channelMap[ch] = 4;
+                else if (is5_1) channelMap[ch] = 4;
+            }
+            else if (type == juce::AudioChannelSet::leftSurroundRear)
+            {
+                if (is9_1)      channelMap[ch] = 7;
+                else if (is7_1) channelMap[ch] = 5;
+                else if (is5_1) channelMap[ch] = 3;
+            }
+            else if (type == juce::AudioChannelSet::rightSurroundRear)
+            {
+                if (is9_1)      channelMap[ch] = 8;
+                else if (is7_1) channelMap[ch] = 6;
+                else if (is5_1) channelMap[ch] = 4;
+            }
+        }
+    }
+
+    // Apply the map
+    for (int ch = 0; ch < numOutChannels; ++ch)
+    {
+        if (is3_0 && channelIsLFE[ch])
+        {
+            buffer.clear (ch, 0, numSamples);
+            continue;
+        }
+
+        if (channelIsLFE[ch])
+        {
+            if (lfeGain > 0.0f)
+                juce::FloatVectorOperations::multiply (buffer.getWritePointer (ch), chLFE.data(), lfeGain, numSamples);
+            else
+                buffer.clear (ch, 0, numSamples);
+        }
+        else if (channelMap[ch] >= 0 && channelMap[ch] < numSpecOut)
+        {
+            juce::FloatVectorOperations::copy (buffer.getWritePointer (ch), chOutputs[channelMap[ch]].data(), numSamples);
         }
         else
         {
-            buffer.clear (3, 0, numSamples);
+            buffer.clear (ch, 0, numSamples);
         }
-        maxUsedCh = juce::jmax (maxUsedCh, 4);
-    }
-
-    // Surround channel routing based on bus layout
-    if (numSpecOut > 5)
-    {
-        // 7.1: chOutputs[3]=SideL, [4]=SideR, [5]=RearL, [6]=RearR
-        int sideLIdx = outputLayout.getChannelIndexForType (juce::AudioChannelSet::leftSurround);
-        int sideRIdx = outputLayout.getChannelIndexForType (juce::AudioChannelSet::rightSurround);
-        int rearLIdx = outputLayout.getChannelIndexForType (juce::AudioChannelSet::leftSurroundRear);
-        int rearRIdx = outputLayout.getChannelIndexForType (juce::AudioChannelSet::rightSurroundRear);
-
-        if (sideLIdx < 0 && numOutChannels > 4) sideLIdx = 4;
-        if (sideRIdx < 0 && numOutChannels > 5) sideRIdx = 5;
-        if (rearLIdx < 0 && numOutChannels > 6) rearLIdx = 6;
-        if (rearRIdx < 0 && numOutChannels > 7) rearRIdx = 7;
-
-        if (sideLIdx >= 0 && sideLIdx < numOutChannels)
-        {
-            juce::FloatVectorOperations::copy (buffer.getWritePointer (sideLIdx), chOutputs[3].data(), numSamples);
-            maxUsedCh = juce::jmax (maxUsedCh, sideLIdx + 1);
-        }
-        if (sideRIdx >= 0 && sideRIdx < numOutChannels)
-        {
-            juce::FloatVectorOperations::copy (buffer.getWritePointer (sideRIdx), chOutputs[4].data(), numSamples);
-            maxUsedCh = juce::jmax (maxUsedCh, sideRIdx + 1);
-        }
-        if (rearLIdx >= 0 && rearLIdx < numOutChannels)
-        {
-            juce::FloatVectorOperations::copy (buffer.getWritePointer (rearLIdx), chOutputs[5].data(), numSamples);
-            maxUsedCh = juce::jmax (maxUsedCh, rearLIdx + 1);
-        }
-        if (rearRIdx >= 0 && rearRIdx < numOutChannels)
-        {
-            juce::FloatVectorOperations::copy (buffer.getWritePointer (rearRIdx), chOutputs[6].data(), numSamples);
-            maxUsedCh = juce::jmax (maxUsedCh, rearRIdx + 1);
-        }
-    }
-    else if (numSpecOut > 3)
-    {
-        // 5.1: chOutputs[3]=RearL, [4]=RearR
-        if (surroundLIdx >= 0 && surroundLIdx < numOutChannels)
-        {
-            juce::FloatVectorOperations::copy (buffer.getWritePointer (surroundLIdx), chOutputs[3].data(), numSamples);
-            maxUsedCh = juce::jmax (maxUsedCh, surroundLIdx + 1);
-        }
-        if (surroundRIdx >= 0 && surroundRIdx < numOutChannels)
-        {
-            juce::FloatVectorOperations::copy (buffer.getWritePointer (surroundRIdx), chOutputs[4].data(), numSamples);
-            maxUsedCh = juce::jmax (maxUsedCh, surroundRIdx + 1);
-        }
-    }
-
-    // Zero remaining channels
-    for (int c = maxUsedCh; c < numOutChannels; ++c)
-    {
-        if (c == 3) continue;
-        buffer.clear (c, 0, numSamples);
     }
 
     // Fade-out
@@ -372,21 +586,23 @@ void SpatialExpanderAudioProcessor::processBlock (juce::AudioBuffer<float>& buff
     }
 }
 
-void SpatialExpanderAudioProcessor::parameterChanged (const juce::String& parameterID, float newValue)
+void SpatialExpanderAudioProcessor::parameterChanged (const juce::String& parameterID, float /*newValue*/)
 {
     if (parameterID == "latency")
     {
         if (calState.load() != CalState::Normal)
             return;
 
-        if (fadeSamplesTotal <= 0)
-        {
-            pendingWindowOrder.store (9 + static_cast<int> (newValue));
-            triggerAsyncUpdate();
+        pendingWindowOrder.store (9 + static_cast<int> (apvts.getRawParameterValue ("latency")->load()));
+        fadeSamplesLeft.store (fadeSamplesTotal);
+        calState.store (CalState::FadingOut);
+    }
+    else if (parameterID == "outputFormat")
+    {
+        if (calState.load() != CalState::Normal)
             return;
-        }
 
-        pendingWindowOrder.store (9 + static_cast<int> (newValue));
+        pendingFormatChange.store (true);
         fadeSamplesLeft.store (fadeSamplesTotal);
         calState.store (CalState::FadingOut);
     }
@@ -394,119 +610,85 @@ void SpatialExpanderAudioProcessor::parameterChanged (const juce::String& parame
 
 void SpatialExpanderAudioProcessor::handleAsyncUpdate()
 {
-    if (calState.load() == CalState::Reconfiguring)
+    if (calState.load() != CalState::Reconfiguring)
+        return;
+
+    int newOrder = pendingWindowOrder.exchange (0);
+    bool fmtChanged = pendingFormatChange.exchange (false);
+
+    if (newOrder > 0 || fmtChanged)
     {
-        int newOrder = pendingWindowOrder.exchange (0);
+        int numSpecOut = getNumSpectralOutputs();
+        int currentBlockSize = lastBlockSize;
+        if (currentBlockSize < 1) currentBlockSize = 512;
+
         if (newOrder > 0)
         {
             stft.setWindowSize (newOrder);
             analyser.prepare (stft.fftSize);
+        }
 
-            int numSpecOut = getNumSpectralOutputs();
-            stft.setNumOutputs (numSpecOut);
+        int fftSize = stft.fftSize;
+        int hopSize = stft.hopSize;
 
-            int currentBlockSize = lastBlockSize;
-            if (currentBlockSize < 1) currentBlockSize = 512;
-            int fftSize = stft.fftSize;
-            int hopSize = stft.hopSize;
+        stft.setNumOutputs (numSpecOut);
 
-            int firstOutput = currentBlockSize * ((fftSize + hopSize - 1) / currentBlockSize);
-            int actualDelay = firstOutput - hopSize;
-            delaySize       = fftSize - actualDelay;
-            if (delaySize < 0) delaySize = 0;
-            delayCapacity   = std::max (delaySize, currentBlockSize) * 4;
-            delayBufs.resize (numSpecOut);
-            for (auto& buf : delayBufs)
-                buf.assign (delayCapacity, 0.0f);
-            delayWritePos   = 0;
+        int firstOutput = currentBlockSize * ((fftSize + hopSize - 1) / currentBlockSize);
+        int actualDelay = firstOutput - hopSize;
+        delaySize       = fftSize - actualDelay;
+        if (delaySize < 0) delaySize = 0;
+        delayCapacity   = std::max (delaySize, currentBlockSize) * 4;
+        delayBufs.resize (numSpecOut);
+        for (auto& buf : delayBufs)
+            buf.assign (delayCapacity, 0.0f);
+        delayWritePos   = 0;
 
+        if (newOrder > 0)
+        {
             float cutoff = apvts.getRawParameterValue ("lfeCutoff")->load();
             lfe.prepare (getSampleRate(), fftSize, cutoff);
             prevLfeCutoff = cutoff;
-
-            chOutputs.resize (numSpecOut);
-            for (auto& buf : chOutputs)
-                buf.resize (currentBlockSize, 0.0f);
-            chOutputPtrs.resize (numSpecOut);
-            for (int ch = 0; ch < numSpecOut; ++ch)
-                chOutputPtrs[ch] = chOutputs[ch].data();
-
-            // Resize cascade buffers
-            cascadeFftSize = fftSize;
-            cascadeCenter.assign (fftSize, 0.0f);
-            cascadeFrontL.assign (fftSize, 0.0f);
-            cascadeFrontR.assign (fftSize, 0.0f);
-            cascadeSideL.assign (fftSize, 0.0f);
-            cascadeSideR.assign (fftSize, 0.0f);
-            cascadeRearL.assign (fftSize, 0.0f);
-            cascadeRearR.assign (fftSize, 0.0f);
-            cascadeTemp.assign (fftSize, 0.0f);
-            cascadeLresSave.assign (fftSize, 0.0f);
-            cascadeRresSave.assign (fftSize, 0.0f);
+            setLatencySamples (fftSize);
         }
 
-        runCalibration();
+        chOutputs.resize (numSpecOut);
+        for (auto& buf : chOutputs)
+            buf.resize (currentBlockSize, 0.0f);
+        chOutputPtrs.resize (numSpecOut);
+        for (int ch = 0; ch < numSpecOut; ++ch)
+            chOutputPtrs[ch] = chOutputs[ch].data();
 
-        setLatencySamples (stft.fftSize);
-        updateHostDisplay();
-        fadeSamplesLeft.store (fadeSamplesTotal);
-        calState.store (CalState::FadingIn);
-        return;
+        // Resize cascade buffers
+        cascadeFftSize = fftSize;
+        cascadeCenter.assign (fftSize, 0.0f);
+        cascadeFrontL.assign (fftSize, 0.0f);
+        cascadeFrontR.assign (fftSize, 0.0f);
+        cascadeWideL.assign (fftSize, 0.0f);
+        cascadeWideR.assign (fftSize, 0.0f);
+        cascadeSideL.assign (fftSize, 0.0f);
+        cascadeSideR.assign (fftSize, 0.0f);
+        cascadeRearL.assign (fftSize, 0.0f);
+        cascadeRearR.assign (fftSize, 0.0f);
+        cascadeTemp.assign (fftSize, 0.0f);
+        cascadeLresSave.assign (fftSize, 0.0f);
+        cascadeRresSave.assign (fftSize, 0.0f);
     }
 
-    int newOrder = pendingWindowOrder.exchange (0);
-    if (newOrder == 0)
-        return;
-
-    stft.setWindowSize (newOrder);
-    analyser.prepare (stft.fftSize);
-
-    int numSpecOut = getNumSpectralOutputs();
-    stft.setNumOutputs (numSpecOut);
-
-    int currentBlockSize = lastBlockSize;
-    if (currentBlockSize < 1) currentBlockSize = 512;
-    int fftSize = stft.fftSize;
-    int hopSize = stft.hopSize;
-
-    int firstOutput = currentBlockSize * ((fftSize + hopSize - 1) / currentBlockSize);
-    int actualDelay = firstOutput - hopSize;
-    delaySize       = fftSize - actualDelay;
-    if (delaySize < 0) delaySize = 0;
-    delayCapacity   = std::max (delaySize, currentBlockSize) * 4;
-    delayBufs.resize (numSpecOut);
-    for (auto& buf : delayBufs)
-        buf.assign (delayCapacity, 0.0f);
-    delayWritePos   = 0;
-
-    int reportedLatency = fftSize;
-    float cutoff = apvts.getRawParameterValue ("lfeCutoff")->load();
-    lfe.prepare (getSampleRate(), reportedLatency, cutoff);
-    setLatencySamples (reportedLatency);
+    runCalibration();
     updateHostDisplay();
 
-    // Resize cascade buffers
-    cascadeFftSize = fftSize;
-    cascadeCenter.assign (fftSize, 0.0f);
-    cascadeFrontL.assign (fftSize, 0.0f);
-    cascadeFrontR.assign (fftSize, 0.0f);
-    cascadeSideL.assign (fftSize, 0.0f);
-    cascadeSideR.assign (fftSize, 0.0f);
-    cascadeRearL.assign (fftSize, 0.0f);
-    cascadeRearR.assign (fftSize, 0.0f);
-    cascadeTemp.assign (fftSize, 0.0f);
-    cascadeLresSave.assign (fftSize, 0.0f);
-    cascadeRresSave.assign (fftSize, 0.0f);
+    fadeSamplesLeft.store (fadeSamplesTotal);
+    calState.store (CalState::FadingIn);
 }
 
 void SpatialExpanderAudioProcessor::doCascade (const float* fftL, const float* fftR,
                                                 float* fftCenter, float* fftFrontL,
-                                                float* fftFrontR, float* fftSideL,
+                                                float* fftFrontR, float* fftWideL,
+                                                float* fftWideR, float* fftSideL,
                                                 float* fftSideR, float* fftRearL,
                                                 float* fftRearR, float* fftTemp,
-                                                int fftSize)
+                                                int fftSize, int numSpecOut)
 {
-    int numSpecOut = getNumSpectralOutputs();
 
     // Layer 1: Extract C, Lres, Rres from L, R
     analyser.onFrame (fftL, fftR, fftCenter, fftFrontL, fftFrontR, fftSize);
@@ -553,15 +735,30 @@ void SpatialExpanderAudioProcessor::doCascade (const float* fftL, const float* f
     std::copy (fftRearR, fftRearR + fftSize, cascadeRresSave.data());
     analyser.onFrame (cascadeLresSave.data(), cascadeRresSave.data(),
                       fftSideR, fftFrontR, fftRearR, fftSize);
+
+    if (numSpecOut <= 7)
+        return;
+
+    // Layer 4 left: Extract WideL, newFrontL, newSideL from (FrontL, SideL)
+    std::copy (fftFrontL, fftFrontL + fftSize, cascadeLresSave.data());
+    std::copy (fftSideL, fftSideL + fftSize, cascadeRresSave.data());
+    analyser.onFrame (cascadeLresSave.data(), cascadeRresSave.data(),
+                      fftWideL, fftFrontL, fftSideL, fftSize);
+
+    // Layer 4 right: Extract WideR, newFrontR, newSideR from (FrontR, SideR)
+    std::copy (fftFrontR, fftFrontR + fftSize, cascadeLresSave.data());
+    std::copy (fftSideR, fftSideR + fftSize, cascadeRresSave.data());
+    analyser.onFrame (cascadeLresSave.data(), cascadeRresSave.data(),
+                      fftWideR, fftFrontR, fftSideR, fftSize);
 }
 
 void SpatialExpanderAudioProcessor::applyStretch (float* fftCenter, float* fftFrontL,
-                                                   float* fftFrontR, float* fftSideL,
-                                                   float* fftSideR, float* fftRearL,
-                                                   float* fftRearR, int fftSize,
-                                                   float stretch)
+                                                    float* fftFrontR, float* fftWideL,
+                                                    float* fftWideR, float* fftSideL,
+                                                    float* fftSideR, float* fftRearL,
+                                                    float* fftRearR, int fftSize,
+                                                    float stretch, int numSpecOut)
 {
-    int numSpecOut = getNumSpectralOutputs();
     if (numSpecOut <= 3 || stretch >= 1.0f)
         return;
 
@@ -581,12 +778,9 @@ void SpatialExpanderAudioProcessor::applyStretch (float* fftCenter, float* fftFr
             fftFrontR[i] += rr * invS;
         }
     }
-    else
+    else if (numSpecOut <= 7)
     {
-        // 7.1+: SideL/SideR → Center/FrontL/FrontR, RearL/RearR → FrontL/FrontR
-        // At stretch=0: SideL→C(0.5)+FrontL(0.5), SideR→C(0.5)+FrontR(0.5),
-        //               RearL→FrontL(1.0), RearR→FrontR(1.0)
-        // At stretch=1: identity (all channels stay)
+        // 7.1: SideL/SideR → Center/FrontL/FrontR, RearL/RearR → FrontL/FrontR
         for (int i = 0; i < fftSize; ++i)
         {
             float sl = fftSideL[i];
@@ -604,13 +798,38 @@ void SpatialExpanderAudioProcessor::applyStretch (float* fftCenter, float* fftFr
             fftFrontR[i] += sr * invS * 0.5f + rr * invS;
         }
     }
+    else
+    {
+        // 9.1: WideL/WideR → Center/FrontL/FrontR, SideL/SideR → Center/FrontL/FrontR,
+        //       RearL/RearR → FrontL/FrontR
+        for (int i = 0; i < fftSize; ++i)
+        {
+            float wl = fftWideL[i];
+            float wr = fftWideR[i];
+            float sl = fftSideL[i];
+            float sr = fftSideR[i];
+            float rl = fftRearL[i];
+            float rr = fftRearR[i];
+
+            fftWideL[i] = wl * s;
+            fftWideR[i] = wr * s;
+            fftSideL[i] = sl * s;
+            fftSideR[i] = sr * s;
+            fftRearL[i] = rl * s;
+            fftRearR[i] = rr * s;
+
+            fftCenter[i] += (wl + wr + sl + sr) * invS * 0.5f;
+            fftFrontL[i] += (wl + sl) * invS * 0.5f + rl * invS;
+            fftFrontR[i] += (wr + sr) * invS * 0.5f + rr * invS;
+        }
+    }
 }
 
 void SpatialExpanderAudioProcessor::onFrame (const float* fftL, const float* fftR,
-                                              float** fftOutputs, int /*numOutputs*/,
+                                              float** fftOutputs, int numOutputs,
                                               int fftSize)
 {
-    int numSpecOut = getNumSpectralOutputs();
+    int numSpecOut = numOutputs;
 
     // Ensure cascade buffers are sized
     if (cascadeFftSize != fftSize)
@@ -618,6 +837,8 @@ void SpatialExpanderAudioProcessor::onFrame (const float* fftL, const float* fft
         cascadeCenter.resize (fftSize);
         cascadeFrontL.resize (fftSize);
         cascadeFrontR.resize (fftSize);
+        cascadeWideL.resize (fftSize);
+        cascadeWideR.resize (fftSize);
         cascadeSideL.resize (fftSize);
         cascadeSideR.resize (fftSize);
         cascadeRearL.resize (fftSize);
@@ -628,15 +849,18 @@ void SpatialExpanderAudioProcessor::onFrame (const float* fftL, const float* fft
 
     // Full cascade using pre-allocated buffers
     doCascade (fftL, fftR, cascadeCenter.data(), cascadeFrontL.data(),
-               cascadeFrontR.data(), cascadeSideL.data(), cascadeSideR.data(),
+               cascadeFrontR.data(), cascadeWideL.data(), cascadeWideR.data(),
+               cascadeSideL.data(), cascadeSideR.data(),
                cascadeRearL.data(), cascadeRearR.data(),
-               cascadeTemp.data(), fftSize);
+               cascadeTemp.data(), fftSize, numSpecOut);
 
     // Stretch
     float stretch = apvts.getRawParameterValue ("stretch")->load();
     applyStretch (cascadeCenter.data(), cascadeFrontL.data(), cascadeFrontR.data(),
+                  cascadeWideL.data(), cascadeWideR.data(),
                   cascadeSideL.data(), cascadeSideR.data(),
-                  cascadeRearL.data(), cascadeRearR.data(), fftSize, stretch);
+                  cascadeRearL.data(), cascadeRearR.data(),
+                  fftSize, stretch, numSpecOut);
 
     // Calibration gain from ILD
     if (!gainTable.empty())
@@ -683,6 +907,11 @@ void SpatialExpanderAudioProcessor::onFrame (const float* fftL, const float* fft
         applyGain (cascadeCenter.data(), fftSize);
         applyGain (cascadeFrontL.data(), fftSize);
         applyGain (cascadeFrontR.data(), fftSize);
+        if (numSpecOut > 7)
+        {
+            applyGain (cascadeWideL.data(), fftSize);
+            applyGain (cascadeWideR.data(), fftSize);
+        }
         if (numSpecOut > 5)
         {
             applyGain (cascadeSideL.data(), fftSize);
@@ -696,6 +925,8 @@ void SpatialExpanderAudioProcessor::onFrame (const float* fftL, const float* fft
     // 3.0: outputs[0]=Center, [1]=Lres, [2]=Rres
     // 5.1: outputs[0]=Center, [1]=FrontL, [2]=FrontR, [3]=RearL, [4]=RearR
     // 7.1: outputs[0]=Center, [1]=FrontL, [2]=FrontR, [3]=SideL, [4]=SideR, [5]=RearL, [6]=RearR
+    // 9.1: outputs[0]=Center, [1]=FrontL, [2]=FrontR, [3]=WideL, [4]=WideR,
+    //       [5]=SideL, [6]=SideR, [7]=RearL, [8]=RearR
     if (numSpecOut <= 3)
     {
         std::copy (cascadeCenter.begin(), cascadeCenter.end(), fftOutputs[0]);
@@ -710,7 +941,7 @@ void SpatialExpanderAudioProcessor::onFrame (const float* fftL, const float* fft
         std::copy (cascadeRearL.begin(), cascadeRearL.end(), fftOutputs[3]);
         std::copy (cascadeRearR.begin(), cascadeRearR.end(), fftOutputs[4]);
     }
-    else
+    else if (numSpecOut <= 7)
     {
         std::copy (cascadeCenter.begin(), cascadeCenter.end(), fftOutputs[0]);
         std::copy (cascadeFrontL.begin(), cascadeFrontL.end(), fftOutputs[1]);
@@ -719,6 +950,18 @@ void SpatialExpanderAudioProcessor::onFrame (const float* fftL, const float* fft
         std::copy (cascadeSideR.begin(), cascadeSideR.end(), fftOutputs[4]);
         std::copy (cascadeRearL.begin(), cascadeRearL.end(), fftOutputs[5]);
         std::copy (cascadeRearR.begin(), cascadeRearR.end(), fftOutputs[6]);
+    }
+    else
+    {
+        std::copy (cascadeCenter.begin(), cascadeCenter.end(), fftOutputs[0]);
+        std::copy (cascadeFrontL.begin(), cascadeFrontL.end(), fftOutputs[1]);
+        std::copy (cascadeFrontR.begin(), cascadeFrontR.end(), fftOutputs[2]);
+        std::copy (cascadeWideL.begin(), cascadeWideL.end(), fftOutputs[3]);
+        std::copy (cascadeWideR.begin(), cascadeWideR.end(), fftOutputs[4]);
+        std::copy (cascadeSideL.begin(), cascadeSideL.end(), fftOutputs[5]);
+        std::copy (cascadeSideR.begin(), cascadeSideR.end(), fftOutputs[6]);
+        std::copy (cascadeRearL.begin(), cascadeRearL.end(), fftOutputs[7]);
+        std::copy (cascadeRearR.begin(), cascadeRearR.end(), fftOutputs[8]);
     }
 }
 
@@ -774,6 +1017,8 @@ void SpatialExpanderAudioProcessor::runCalibration()
     std::vector<float> fftCenter (static_cast<size_t> (numBinsFull) * 2, 0.0f);
     std::vector<float> fftFrontL (static_cast<size_t> (numBinsFull) * 2, 0.0f);
     std::vector<float> fftFrontR (static_cast<size_t> (numBinsFull) * 2, 0.0f);
+    std::vector<float> fftWideL (static_cast<size_t> (numBinsFull) * 2, 0.0f);
+    std::vector<float> fftWideR (static_cast<size_t> (numBinsFull) * 2, 0.0f);
     std::vector<float> fftSideL (static_cast<size_t> (numBinsFull) * 2, 0.0f);
     std::vector<float> fftSideR (static_cast<size_t> (numBinsFull) * 2, 0.0f);
     std::vector<float> fftRearL (static_cast<size_t> (numBinsFull) * 2, 0.0f);
@@ -801,14 +1046,17 @@ void SpatialExpanderAudioProcessor::runCalibration()
         // Run cascade
         doCascade (fftL.data(), fftR.data(),
                    fftCenter.data(), fftFrontL.data(),
-                   fftFrontR.data(), fftSideL.data(),
+                   fftFrontR.data(), fftWideL.data(),
+                   fftWideR.data(), fftSideL.data(),
                    fftSideR.data(), fftRearL.data(),
-                   fftRearR.data(), fftTemp.data(), fftSize);
+                   fftRearR.data(), fftTemp.data(), fftSize, numSpecOut);
 
         // Apply Stretch
         applyStretch (fftCenter.data(), fftFrontL.data(), fftFrontR.data(),
+                      fftWideL.data(), fftWideR.data(),
                       fftSideL.data(), fftSideR.data(),
-                      fftRearL.data(), fftRearR.data(), fftSize, stretch);
+                      fftRearL.data(), fftRearR.data(),
+                      fftSize, stretch, numSpecOut);
 
         // Measure total output power
         auto measurePower = [&](float* buf) -> double
@@ -830,7 +1078,16 @@ void SpatialExpanderAudioProcessor::runCalibration()
                           + measurePower (fftFrontL.data())
                           + measurePower (fftFrontR.data());
 
-        if (numSpecOut > 5)
+        if (numSpecOut > 7)
+        {
+            totalPower += measurePower (fftWideL.data())
+                        + measurePower (fftWideR.data())
+                        + measurePower (fftSideL.data())
+                        + measurePower (fftSideR.data())
+                        + measurePower (fftRearL.data())
+                        + measurePower (fftRearR.data());
+        }
+        else if (numSpecOut > 5)
         {
             totalPower += measurePower (fftSideL.data())
                         + measurePower (fftSideR.data())
@@ -876,10 +1133,15 @@ juce::String SpatialExpanderAudioProcessor::getInputWarningText() const
     if (input == nullptr)
         return {};
 
-    auto layout = input->getCurrentLayout();
-    if (layout.size() > 2)
-        return "Input has " + juce::String (layout.size()) + " channels; only L/R are used.";
-    return {};
+    auto inLayout = input->getCurrentLayout();
+    if (inLayout.size() <= 2)
+        return {};
+
+    auto output = getBus (false, 0);
+    if (output != nullptr && output->getCurrentLayout() == inLayout)
+        return {};
+
+    return "Input has " + juce::String (inLayout.size()) + " channels; only L/R are used.";
 }
 
 juce::String SpatialExpanderAudioProcessor::getFormatWarningText (int selectedFormat) const
@@ -896,13 +1158,13 @@ juce::String SpatialExpanderAudioProcessor::getFormatWarningText (int selectedFo
         case Fmt30:  neededChannels = 3;  break;
         case Fmt51:  neededChannels = 6;  break;
         case Fmt71:  neededChannels = 8;  break;
-        case Fmt916: neededChannels = 16; break;
+        case Fmt916: neededChannels = 10; break;  // 9.1 bed minimum (9.1.0 = 10 ch)
         default: return {};
     }
 
     if (busChannels < neededChannels)
         return "Bus has only " + juce::String (busChannels) + " ch; "
-               + juce::String (neededChannels) + " ch needed for selected format. Extra channels discarded.";
+               + juce::String (neededChannels) + " ch needed for selected format. Some channels may be silent.";
 
     return {};
 }
@@ -916,27 +1178,33 @@ juce::String SpatialExpanderAudioProcessor::getCurrentBusFormatName() const
     auto layout = output->getCurrentLayout();
     if (layout == juce::AudioChannelSet::create5point1())       return "5.1";
     if (layout == juce::AudioChannelSet::create7point1())       return "7.1";
-    if (layout == juce::AudioChannelSet::create9point1point6()) return "9.1 (in 9.1.6)";
+    if (layout == juce::AudioChannelSet::create9point1point6()) return "9.1";
     if (layout == juce::AudioChannelSet::createLCR())           return "3.0";
     if (layout == juce::AudioChannelSet::stereo())              return "Stereo";
 
-    int n = layout.size();
-    if (n == 3)  return "3.0 (LCR)";
-    if (n == 4)  return "3.1 (4 ch)";
-    if (n == 6)  return "5.1 (6 ch)";
-    if (n == 8)  return "7.1 (8 ch)";
-    if (n == 16) return "9.1 (in 9.1.6) (16 ch)";
-    return juce::String (n) + " ch";
+    int detected = detectFormatFromBus();
+    switch (detected)
+    {
+        case Fmt30:  return "3.0";
+        case Fmt51:  return "5.1";
+        case Fmt71:  return "7.1";
+        case Fmt916: return "9.1";
+        default:     return juce::String (layout.size()) + " ch";
+    }
 }
 
 void SpatialExpanderAudioProcessor::getStateInformation (juce::MemoryBlock& destData)
 {
-    juce::ignoreUnused (destData);
+    auto state = apvts.copyState();
+    std::unique_ptr<juce::XmlElement> xml (state.createXml());
+    copyXmlToBinary (*xml, destData);
 }
 
 void SpatialExpanderAudioProcessor::setStateInformation (const void* data, int sizeInBytes)
 {
-    juce::ignoreUnused (data, sizeInBytes);
+    std::unique_ptr<juce::XmlElement> xml (getXmlFromBinary (data, sizeInBytes));
+    if (xml != nullptr && xml->hasTagName (apvts.state.getType()))
+        apvts.replaceState (juce::ValueTree::fromXml (*xml));
 }
 
 juce::AudioProcessor* JUCE_CALLTYPE createPluginFilter()

@@ -44,7 +44,10 @@ void StereoSTFT::setNumOutputs (int n)
         return;
     numOutputs = n;
     if (fftSize > 0)
+    {
         allocateBuffers();
+        reset();
+    }
 }
 
 void StereoSTFT::prepare (double sampleRate)
