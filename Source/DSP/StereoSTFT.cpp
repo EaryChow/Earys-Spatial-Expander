@@ -12,13 +12,15 @@ void StereoSTFT::allocateBuffers()
     }
 
     synthWindow.resize (fftSize);
-    for (int i = 0; i < hopSize; ++i)
+    for (int i = 0; i < fftSize; ++i)
     {
-        float w0 = window[i];
-        float w1 = window[i + hopSize];
-        float denom = w0 * w0 + w1 * w1;
-        synthWindow[i] = (denom > 1e-12f) ? w0 / denom : w0;
-        synthWindow[i + hopSize] = (denom > 1e-12f) ? w1 / denom : w1;
+        float sumSq = 0.0f;
+        for (int offset = 0; offset < fftSize; offset += hopSize)
+        {
+            int idx = (i + offset) % fftSize;
+            sumSq += window[idx] * window[idx];
+        }
+        synthWindow[i] = (sumSq > 1e-12f) ? window[i] / sumSq : window[i];
     }
 
     inBufL.assign (fftSize, 0.0f);
@@ -64,7 +66,7 @@ void StereoSTFT::setWindowSize (int newFftOrder)
 
     fftOrder = newFftOrder;
     fftSize  = 1 << fftOrder;
-    hopSize  = fftSize / 2;
+    hopSize  = fftSize / 8;
 
     fft = std::make_unique<juce::dsp::FFT> (fftOrder);
     allocateBuffers();
@@ -85,14 +87,14 @@ void StereoSTFT::reset()
     inWp = 0;
     totalIn = 0;
     outWp = 0;
-    outRp = hopSize;
+    outRp = fftSize - hopSize;
     outReady = 0;
     framesCompleted = 0;
 }
 
 double StereoSTFT::getLatencyMs() const noexcept
 {
-    return static_cast<double> (hopSize) / sampleRate_ * 1000.0;
+    return static_cast<double> (fftSize) / sampleRate_ * 1000.0;
 }
 
 void StereoSTFT::process (const float* inL, const float* inR,
@@ -183,6 +185,7 @@ void StereoSTFT::processFrame()
     outWp = (outWp + hopSize) % outBufSize;
 
     ++framesCompleted;
-    if (framesCompleted >= 2)
+    int minFramesForCola = fftSize / hopSize;
+    if (framesCompleted >= minFramesForCola)
         outReady += hopSize;
 }

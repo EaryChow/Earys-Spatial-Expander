@@ -15,13 +15,13 @@ public:
     void process (const float* inL, const float* inR,
                   float** outputs, int numSamples);
 
-    int getLatencySamples() const noexcept { return hopSize; }
+    int getLatencySamples() const noexcept { return fftSize; }
     double getLatencyMs() const noexcept;
     int getNumBins() const noexcept { return fftSize / 2 + 1; }
 
     int fftOrder = 9;
     int fftSize  = 512;
-    int hopSize  = 256;
+    int hopSize  = 64;
     int numOutputs = 3;
 
     class FrameListener

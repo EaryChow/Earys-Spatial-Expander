@@ -182,9 +182,16 @@ void SpatialExpanderAudioProcessor::prepareToPlay (double sampleRate, int sample
     int fftSize   = stft.fftSize;
     int hopSize   = stft.hopSize;
 
-    int firstOutput = currentBlockSize * ((fftSize + hopSize - 1) / currentBlockSize);
-    int actualDelay = firstOutput - hopSize;
-    delaySize       = fftSize - actualDelay;
+    int overlapFactor = fftSize / hopSize;
+
+    // First block boundary that contains the last frame needed for COLA
+    int firstOutput = currentBlockSize * ((fftSize + (overlapFactor - 1) * hopSize - 1) / currentBlockSize);
+
+    // Causal inherent delay: first sample with all overlapFactor frames contributing
+    int inherentDelay = fftSize - hopSize;   // = (overlapFactor - 1) * hopSize
+
+    int actualDelay   = firstOutput - inherentDelay;
+    delaySize         = fftSize - actualDelay;
     if (delaySize < 0) delaySize = 0;
 
     delayCapacity   = std::max (delaySize, currentBlockSize) * 4;
@@ -663,9 +670,13 @@ void SpatialExpanderAudioProcessor::handleAsyncUpdate()
 
         stft.setNumOutputs (numSpecOut);
 
-        int firstOutput = currentBlockSize * ((fftSize + hopSize - 1) / currentBlockSize);
-        int actualDelay = firstOutput - hopSize;
-        delaySize       = fftSize - actualDelay;
+        int overlapFactor = fftSize / hopSize;
+
+        int firstOutput = currentBlockSize * ((fftSize + (overlapFactor - 1) * hopSize - 1) / currentBlockSize);
+        int inherentDelay = fftSize - hopSize;
+
+        int actualDelay   = firstOutput - inherentDelay;
+        delaySize         = fftSize - actualDelay;
         if (delaySize < 0) delaySize = 0;
         delayCapacity   = std::max (delaySize, currentBlockSize) * 4;
         delayBufs.resize (numSpecOut);
