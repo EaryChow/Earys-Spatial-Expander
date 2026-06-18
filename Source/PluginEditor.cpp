@@ -106,7 +106,7 @@ SpatialExpanderAudioProcessorEditor::SpatialExpanderAudioProcessorEditor (
     addAndMakeVisible (latencyLabel);
 
     updateLatencyComboBox();
-    latencyComboBox.setSelectedId (2);
+    latencyComboBox.setSelectedId (4);
     addAndMakeVisible (latencyComboBox);
     latencyAttach = std::make_unique<juce::AudioProcessorValueTreeState::ComboBoxAttachment>(
         processor.getAPVTS(), "latency", latencyComboBox);
@@ -324,10 +324,10 @@ void SpatialExpanderAudioProcessorEditor::updateLatencyComboBox()
     if (sr < 1000.0) sr = 48000.0;
 
     auto currentId = latencyComboBox.getSelectedId();
-    int values[] = { 512, 1024, 2048 };
+    int values[] = { 512, 1024, 2048, 4096 };
 
     latencyComboBox.clear (juce::dontSendNotification);
-    for (int i = 0; i < 3; ++i)
+    for (int i = 0; i < 4; ++i)
     {
         double ms = static_cast<double> (values[i]) / sr * 1000.0;
         juce::String label = juce::String (values[i]) + " (" + juce::String (ms, 1) + " ms)";

@@ -15,7 +15,7 @@ SpatialExpanderAudioProcessor::SpatialExpanderAudioProcessor()
           std::make_unique<juce::AudioParameterChoice> ("outputFormat", "Output Format",
               juce::StringArray { "Auto", "3.0", "5.1", "7.1", "9.1" }, 0),
           std::make_unique<juce::AudioParameterChoice> ("latency", "Latency",
-              juce::StringArray { "512", "1024", "2048" }, 1),
+              juce::StringArray { "512", "1024", "2048", "4096" }, 3),
           std::make_unique<juce::AudioParameterFloat> ("leakCenter", "Leak Center",
               juce::NormalisableRange<float> (0.0f, 1.5f, 0.01f), 0.0f),
           std::make_unique<juce::AudioParameterFloat> ("stretch", "Stretch",
@@ -1343,7 +1343,7 @@ void SpatialExpanderAudioProcessor::runCalibration()
 double SpatialExpanderAudioProcessor::getLatencyMs() const noexcept
 {
     auto idx = static_cast<int> (apvts.getRawParameterValue ("latency")->load());
-    int samples[] = { 512, 1024, 2048 };
+    int samples[] = { 512, 1024, 2048, 4096 };
     return static_cast<double> (samples[idx]) / getSampleRate() * 1000.0;
 }
 
