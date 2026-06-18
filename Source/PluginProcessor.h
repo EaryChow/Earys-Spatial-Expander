@@ -49,6 +49,7 @@ public:
     int getNumSpectralOutputs() const noexcept;
 
     enum OutputFormat { Auto = 0, Fmt30, Fmt51, Fmt71, Fmt916 };
+    enum AuxBusIdx { AuxFront = 1, AuxCenter, AuxLFE, AuxWide, AuxSide, AuxRear };
 
 private:
     int detectFormatFromBus() const noexcept;
