@@ -908,6 +908,69 @@ void SpatialExpanderAudioProcessor::onFrame (const float* fftL, const float* fft
                   cascadeRearL.data(), cascadeRearR.data(),
                   fftSize, stretch, numSpecOut);
 
+    // ---- Phase coherence restoration (post-cascade, pre-gain) ----
+    // L-derived channels inherit L's original phase; R-derived inherit R's.
+    // Magnitudes are untouched, so spatial mapping stays exact.
+    auto restorePhase = [&](float* outBuf, const float* phaseRef)
+    {
+        float magOut = std::abs (outBuf[0]);
+        float magRef = std::abs (phaseRef[0]);
+        if (magRef > 1e-18f)
+        {
+            float scale = magOut / magRef;
+            outBuf[0] = phaseRef[0] * scale;
+        }
+
+        magOut = std::abs (outBuf[1]);
+        magRef = std::abs (phaseRef[1]);
+        if (magRef > 1e-18f)
+        {
+            float scale = magOut / magRef;
+            outBuf[1] = phaseRef[1] * scale;
+        }
+
+        for (int k = 1; k < fftSize / 2; ++k)
+        {
+            size_t idx = static_cast<size_t> (k) * 2;
+            float outRe = outBuf[idx], outIm = outBuf[idx + 1];
+            float refRe = phaseRef[idx], refIm = phaseRef[idx + 1];
+
+            float magOut = std::sqrt (outRe * outRe + outIm * outIm);
+            float magRef = std::sqrt (refRe * refRe + refIm * refIm);
+
+            if (magRef > 1e-18f)
+            {
+                float scale = magOut / magRef;
+                outBuf[idx]     = refRe * scale;
+                outBuf[idx + 1] = refIm * scale;
+            }
+        }
+    };
+
+    // L-derived channels
+    if (numSpecOut > 3)
+    {
+        restorePhase (cascadeFrontL.data(), fftL);
+        restorePhase (cascadeRearL.data(), fftL);
+    }
+    if (numSpecOut > 5)
+        restorePhase (cascadeSideL.data(), fftL);
+    if (numSpecOut > 7)
+        restorePhase (cascadeWideL.data(), fftL);
+
+    // R-derived channels
+    if (numSpecOut > 3)
+    {
+        restorePhase (cascadeFrontR.data(), fftR);
+        restorePhase (cascadeRearR.data(), fftR);
+    }
+    if (numSpecOut > 5)
+        restorePhase (cascadeSideR.data(), fftR);
+    if (numSpecOut > 7)
+        restorePhase (cascadeWideR.data(), fftR);
+
+    // Center is left as-is (already extracted with coherent L+R phase)
+
     // Calibration gain from ILD
     if (!gainTable.empty())
     {
