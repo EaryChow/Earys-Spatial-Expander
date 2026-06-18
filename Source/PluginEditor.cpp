@@ -96,7 +96,7 @@ SpatialExpanderAudioProcessorEditor::SpatialExpanderAudioProcessorEditor (
     };
 
     rearIsolationButton.setButtonText ("5.1 Rear Channel Isolation");
-    rearIsolationButton.setToggleState (true, juce::dontSendNotification);
+    rearIsolationButton.setToggleState (false, juce::dontSendNotification);
     addAndMakeVisible (rearIsolationButton);
     rearIsolationAttach = std::make_unique<juce::AudioProcessorValueTreeState::ButtonAttachment>(
         processor.getAPVTS(), "rearIsolation", rearIsolationButton);
