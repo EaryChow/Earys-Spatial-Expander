@@ -1031,22 +1031,31 @@ void SpatialExpanderAudioProcessor::onFrame (const float* fftL, const float* fft
     }
 
     // Channel Offsets (post-calibration per-channel gain)
+    // chOffParams index order: C=0, FL=1, FR=2, WL=3, WR=4, SL=5, SR=6, RL=7, RR=8
+    // Spectral output order differs per format, so we need a remapping.
     {
         float* bufMap[9] = {};
+        int chOffIdx[9] = {};
         if (numSpecOut <= 3)
         {
             bufMap[0] = cascadeCenter.data(); bufMap[1] = cascadeFrontL.data(); bufMap[2] = cascadeFrontR.data();
+            chOffIdx[0] = 0; chOffIdx[1] = 1; chOffIdx[2] = 2;
         }
         else if (numSpecOut <= 5)
         {
             bufMap[0] = cascadeCenter.data(); bufMap[1] = cascadeFrontL.data(); bufMap[2] = cascadeFrontR.data();
             bufMap[3] = cascadeRearL.data();  bufMap[4] = cascadeRearR.data();
+            chOffIdx[0] = 0; chOffIdx[1] = 1; chOffIdx[2] = 2;
+            chOffIdx[3] = 7; chOffIdx[4] = 8;
         }
         else if (numSpecOut <= 7)
         {
             bufMap[0] = cascadeCenter.data(); bufMap[1] = cascadeFrontL.data(); bufMap[2] = cascadeFrontR.data();
             bufMap[3] = cascadeSideL.data();  bufMap[4] = cascadeSideR.data();
             bufMap[5] = cascadeRearL.data();  bufMap[6] = cascadeRearR.data();
+            chOffIdx[0] = 0; chOffIdx[1] = 1; chOffIdx[2] = 2;
+            chOffIdx[3] = 5; chOffIdx[4] = 6;
+            chOffIdx[5] = 7; chOffIdx[6] = 8;
         }
         else
         {
@@ -1054,10 +1063,14 @@ void SpatialExpanderAudioProcessor::onFrame (const float* fftL, const float* fft
             bufMap[3] = cascadeWideL.data();  bufMap[4] = cascadeWideR.data();
             bufMap[5] = cascadeSideL.data();  bufMap[6] = cascadeSideR.data();
             bufMap[7] = cascadeRearL.data();  bufMap[8] = cascadeRearR.data();
+            chOffIdx[0] = 0; chOffIdx[1] = 1; chOffIdx[2] = 2;
+            chOffIdx[3] = 3; chOffIdx[4] = 4;
+            chOffIdx[5] = 5; chOffIdx[6] = 6;
+            chOffIdx[7] = 7; chOffIdx[8] = 8;
         }
         for (int ch = 0; ch < numSpecOut; ++ch)
         {
-            float offsetDb = chOffParams[ch]->load();
+            float offsetDb = chOffParams[chOffIdx[ch]]->load();
             if (std::abs (offsetDb) >= 0.01f)
             {
                 float gain = juce::Decibels::decibelsToGain (offsetDb);
