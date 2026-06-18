@@ -120,6 +120,8 @@ private:
 
     std::atomic<float>* chOffParams[9] = {};
 
+    float smoothedCalGain = 1.0f;
+
     juce::AudioProcessorValueTreeState apvts;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (SpatialExpanderAudioProcessor)

@@ -236,6 +236,7 @@ void SpatialExpanderAudioProcessor::prepareToPlay (double sampleRate, int sample
     cascadeLresSave.assign (cs, 0.0f);
     cascadeRresSave.assign (cs, 0.0f);
 
+    smoothedCalGain = 1.0f;
     runCalibration();
 }
 
@@ -1005,12 +1006,16 @@ void SpatialExpanderAudioProcessor::onFrame (const float* fftL, const float* fft
         int idx = static_cast<int> (std::round (ildDb)) + 60;
         idx = std::max (0, std::min (ildTableSize - 1, idx));
 
-        float gain = gainTable[static_cast<size_t> (idx)];
+        float rawGain = gainTable[static_cast<size_t> (idx)];
 
-        auto applyGain = [gain](float* buf, int size)
+        // Smooth calibration gain across frames to avoid pumping artifacts
+        float decay = std::exp (-static_cast<float> (stft.hopSize) / (static_cast<float> (getSampleRate()) * 0.25f));
+        smoothedCalGain = decay * smoothedCalGain + (1.0f - decay) * rawGain;
+
+        auto applyGain = [&](float* buf, int size)
         {
             for (int i = 0; i < size; ++i)
-                buf[i] *= gain;
+                buf[i] *= smoothedCalGain;
         };
 
         applyGain (cascadeCenter.data(), fftSize);
