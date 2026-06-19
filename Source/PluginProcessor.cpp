@@ -1398,7 +1398,8 @@ void SpatialExpanderAudioProcessor::runCalibration()
     // -----------------------------------------------------------------
 
     // 1. Generate pink noise with 0 dB true peak
-    const int calDuration = stft.fftSize * 8;
+    // Fixed duration ensures consistent peak statistics across FFT sizes.
+    const int calDuration = 65536;
     std::vector<float> pinkL (calDuration), pinkR (calDuration);
 
     std::mt19937 rng2 (12345);
