@@ -5,7 +5,7 @@ StereoSTFT::StereoSTFT() : fft (std::make_unique<juce::dsp::FFT> (fftOrder)) {}
 void StereoSTFT::allocateBuffers()
 {
     window.resize (fftSize);
-    double beta = 6.0;
+    double beta = 0.5;
     for (int i = 0; i < fftSize; ++i)
         window[i] = static_cast<float> (juce::dsp::SpecialFunctions::besselI0 (beta * std::sqrt (1.0 - std::pow ((2.0 * i / fftSize - 1.0), 2.0))) /
                                           juce::dsp::SpecialFunctions::besselI0 (beta));
