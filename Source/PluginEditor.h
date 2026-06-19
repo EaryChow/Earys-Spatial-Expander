@@ -66,9 +66,13 @@ private:
 
     void updateAdvancedPanel();
 
+    juce::TextButton measureButton;
+    juce::Label latencyResultLabel;
+
     juce::Label warningLabel;
 
     int lastDetectedFormat = -1;
+    int lastDisplayedLatency = -999;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (SpatialExpanderAudioProcessorEditor)
 };

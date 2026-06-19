@@ -48,6 +48,9 @@ public:
 
     int getNumSpectralOutputs() const noexcept;
 
+    std::atomic<bool> pendingLatencyMeasurement { false };
+    std::atomic<int> measuredLatencySamples { -1 };
+
     enum OutputFormat { Auto = 0, Fmt30, Fmt51, Fmt71, Fmt916 };
     enum AuxBusIdx { AuxFront = 1, AuxCenter, AuxLFE, AuxWide, AuxSide, AuxRear };
 
@@ -120,6 +123,16 @@ private:
     int cascadeFftSize = 0;
 
     std::atomic<float>* chOffParams[9] = {};
+
+    // Latency measurement state (audio-thread only after trigger)
+    int measPhase = 0;
+    int measTotalPos = 0;
+    int measTotalLen = 0;
+    int measImpulsePos = 0;
+    int measNumSpecOut = 0;
+
+    std::vector<float> measInput;
+    std::vector<std::vector<float>> measOutput;
 
     float smoothedCalGain = 1.0f;
 

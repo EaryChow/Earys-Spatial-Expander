@@ -111,6 +111,20 @@ SpatialExpanderAudioProcessorEditor::SpatialExpanderAudioProcessorEditor (
     latencyAttach = std::make_unique<juce::AudioProcessorValueTreeState::ComboBoxAttachment>(
         processor.getAPVTS(), "latency", latencyComboBox);
 
+    measureButton.onClick = [this]
+    {
+        processor.pendingLatencyMeasurement.store (true);
+        latencyResultLabel.setText ("Measuring\u2026", juce::dontSendNotification);
+    };
+
+    measureButton.setButtonText ("Measure Latency");
+    addAndMakeVisible (measureButton);
+
+    latencyResultLabel.setFont (juce::Font (juce::FontOptions (12.0f, juce::Font::bold)));
+    latencyResultLabel.setColour (juce::Label::textColourId, juce::Colours::yellow);
+    latencyResultLabel.setJustificationType (juce::Justification::centred);
+    addAndMakeVisible (latencyResultLabel);
+
     warningLabel.setFont (juce::Font (juce::FontOptions (12.0f)));
     warningLabel.setColour (juce::Label::textColourId, juce::Colours::orange);
     warningLabel.setJustificationType (juce::Justification::centred);
@@ -244,6 +258,10 @@ void SpatialExpanderAudioProcessorEditor::resized()
     latencyLabel.setBounds (latArea.removeFromTop (20));
     latencyComboBox.setBounds (latArea.reduced (60, 0));
 
+    auto measArea = area.removeFromTop (24);
+    measureButton.setBounds (measArea.removeFromLeft (120).reduced (2));
+    latencyResultLabel.setBounds (measArea.reduced (2));
+
     // Advanced panel
     auto advArea = area.removeFromTop (24);
     advancedToggle.setBounds (advArea.reduced (60, 0));
@@ -291,6 +309,31 @@ void SpatialExpanderAudioProcessorEditor::timerCallback()
     stretchSlider.setEnabled (enableStretch);
     stretchLabel.setEnabled (enableStretch);
 
+    // Latency measurement result
+    if (processor.pendingLatencyMeasurement.load())
+    {
+        latencyResultLabel.setText ("Measuring\u2026", juce::dontSendNotification);
+    }
+    else
+    {
+        int measured = processor.measuredLatencySamples.load();
+        if (measured != lastDisplayedLatency)
+        {
+            lastDisplayedLatency = measured;
+            if (measured >= 0)
+            {
+                int expected = static_cast<int> (processor.getLatencySamples());
+                if (measured == expected)
+                    latencyResultLabel.setText ("Latency: " + juce::String (measured) + " samples (OK)",
+                                                juce::dontSendNotification);
+                else
+                    latencyResultLabel.setText ("Latency: " + juce::String (measured)
+                                                + " samples (expected " + juce::String (expected) + ")",
+                                                juce::dontSendNotification);
+            }
+        }
+    }
+
     // Refresh advanced panel if format changed while open
     if (advancedToggle.getToggleState() && numSpecOut != lastDetectedFormat)
     {
@@ -324,7 +367,7 @@ void SpatialExpanderAudioProcessorEditor::updateLatencyComboBox()
     if (sr < 1000.0) sr = 48000.0;
 
     auto currentId = latencyComboBox.getSelectedId();
-    int values[] = { 512, 1024, 2048, 4096 };
+    int values[] = { 496, 992, 1984, 3968 };
 
     latencyComboBox.clear (juce::dontSendNotification);
     for (int i = 0; i < 4; ++i)

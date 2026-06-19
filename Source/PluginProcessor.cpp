@@ -21,7 +21,7 @@ SpatialExpanderAudioProcessor::SpatialExpanderAudioProcessor()
           std::make_unique<juce::AudioParameterChoice> ("outputFormat", "Output Format",
               juce::StringArray { "Auto", "3.0", "5.1", "7.1", "9.1" }, 0),
           std::make_unique<juce::AudioParameterChoice> ("latency", "Latency",
-              juce::StringArray { "512", "1024", "2048", "4096" }, 3),
+              juce::StringArray { "496", "992", "1984", "3968" }, 3),
           std::make_unique<juce::AudioParameterFloat> ("leakCenter", "Leak Center",
               juce::NormalisableRange<float> (0.0f, 1.5f, 0.01f), 0.0f),
           std::make_unique<juce::AudioParameterFloat> ("stretch", "Stretch",
@@ -184,32 +184,18 @@ void SpatialExpanderAudioProcessor::prepareToPlay (double sampleRate, int sample
     stft.prepare (sampleRate);
     analyser.prepare (stft.fftSize);
 
-    int currentBlockSize = samplesPerBlock;
     int fftSize   = stft.fftSize;
     int hopSize   = stft.hopSize;
 
-    int overlapFactor = fftSize / hopSize;
+    delaySize = 0;
+    delayCapacity = 0;
+    delayBufs.clear();
+    delayWritePos = 0;
 
-    // First block boundary that contains the last frame needed for COLA
-    int firstOutput = currentBlockSize * ((fftSize + (overlapFactor - 1) * hopSize - 1) / currentBlockSize);
-
-    // Causal inherent delay: first sample with all overlapFactor frames contributing
-    int inherentDelay = fftSize - hopSize;   // = (overlapFactor - 1) * hopSize
-
-    int actualDelay   = firstOutput - inherentDelay;
-    delaySize         = fftSize - actualDelay;
-    if (delaySize < 0) delaySize = 0;
-
-    delayCapacity   = std::max (delaySize, currentBlockSize) * 4;
-    delayBufs.resize (numSpecOut);
-    for (auto& buf : delayBufs)
-        buf.assign (delayCapacity, 0.0f);
-    delayWritePos   = 0;
-
-    int reportedLatency = fftSize;
+    int actualLatency = fftSize - hopSize;
     float cutoff = apvts.getRawParameterValue ("lfeCutoff")->load();
-    lfe.prepare (sampleRate, reportedLatency, cutoff);
-    setLatencySamples (reportedLatency);
+    lfe.prepare (sampleRate, actualLatency, cutoff);
+    setLatencySamples (actualLatency);
 
     chOutputs.resize (numSpecOut);
     for (auto& buf : chOutputs)
@@ -282,6 +268,44 @@ void SpatialExpanderAudioProcessor::processBlock (juce::AudioBuffer<float>& buff
     auto* inL = buffer.getReadPointer (0);
     auto* inR = (numInChannels > 1) ? buffer.getReadPointer (1) : buffer.getReadPointer (0);
 
+    // --- Latency measurement: inject test signal into the live pipeline ---
+    if (pendingLatencyMeasurement.load())
+    {
+        if (measPhase == 0)
+        {
+            measPhase = 1;
+            int fftSize = stft.fftSize;
+            measTotalLen = fftSize * 8;
+            measImpulsePos = fftSize;
+            measInput.assign (measTotalLen, 0.0f);
+            measInput[measImpulsePos] = 1.0f;
+            measNumSpecOut = static_cast<int> (chOutputs.size());
+            measOutput.assign (measNumSpecOut, std::vector<float> (measTotalLen, 0.0f));
+
+            measTotalPos = 0;
+        }
+
+        if (measPhase == 1)
+        {
+            int remain = measTotalLen - measTotalPos;
+            int block = std::min (numSamples, remain);
+
+            if (block > 0)
+            {
+                auto* bufL = buffer.getWritePointer (0);
+                auto* bufR = (numInChannels > 1) ? buffer.getWritePointer (1) : buffer.getWritePointer (0);
+                std::copy_n (measInput.data() + measTotalPos, block, bufL);
+                for (int i = block; i < numSamples; ++i) bufL[i] = 0.0f;
+                std::copy_n (measInput.data() + measTotalPos, block, bufR);
+                if (numInChannels > 1)
+                    for (int i = block; i < numSamples; ++i) bufR[i] = 0.0f;
+
+                inL = buffer.getReadPointer (0);
+                inR = (numInChannels > 1) ? buffer.getReadPointer (1) : buffer.getReadPointer (0);
+            }
+        }
+    }
+
     float lfeCutoff = apvts.getRawParameterValue ("lfeCutoff")->load();
     float lfeLevelDb = apvts.getRawParameterValue ("lfeLevel")->load();
 
@@ -301,21 +325,6 @@ void SpatialExpanderAudioProcessor::processBlock (juce::AudioBuffer<float>& buff
     stft.process (inL, inR, chOutputPtrs.data(), numSamples);
     lfe.process (inL, inR, chLFE.data(), numSamples);
 
-    // Delay line: makes total latency exactly fftSize
-    for (int i = 0; i < numSamples; ++i)
-    {
-        int readPos = (delayWritePos - delaySize + delayCapacity) % delayCapacity;
-
-        for (int ch = 0; ch < numSpecOut; ++ch)
-        {
-            float input = chOutputs[ch][i];
-            chOutputs[ch][i] = delayBufs[ch][readPos];
-            delayBufs[ch][delayWritePos] = input;
-        }
-
-        delayWritePos = (delayWritePos + 1) % delayCapacity;
-    }
-
     // Leak Center: redistribute calibrated Center to Front L/R
     {
         float leak = apvts.getRawParameterValue ("leakCenter")->load();
@@ -332,6 +341,45 @@ void SpatialExpanderAudioProcessor::processBlock (juce::AudioBuffer<float>& buff
                 chOutputs[2][i] += cOrig * sideAmount;
             }
         }
+    }
+
+    // --- Latency measurement: capture spectral output + mute ---
+    if (measPhase == 1)
+    {
+        int remain = measTotalLen - measTotalPos;
+        int block = std::min (numSamples, remain);
+
+        if (block > 0)
+        {
+            int safeOut = std::min (measNumSpecOut, static_cast<int> (chOutputs.size()));
+            for (int ch = 0; ch < safeOut; ++ch)
+                std::copy_n (chOutputs[ch].data(), block, measOutput[ch].data() + measTotalPos);
+
+            measTotalPos += block;
+
+            if (measTotalPos >= measTotalLen)
+            {
+                float peak = 0.0f;
+                int peakPos = 0;
+                for (int ch = 0; ch < measNumSpecOut; ++ch)
+                    for (int i = 0; i < measTotalLen; ++i)
+                    {
+                        float absVal = std::abs (measOutput[ch][i]);
+                        if (absVal > peak)
+                        {
+                            peak = absVal;
+                            peakPos = i;
+                        }
+                    }
+
+                measuredLatencySamples.store (peakPos - measImpulsePos);
+                pendingLatencyMeasurement.store (false);
+                measPhase = 0;
+            }
+        }
+
+        for (int c = 0; c < numOutChannels; ++c)
+            buffer.clear (c, 0, numSamples);
     }
 
     // -----------------------------------------------------------------
@@ -774,26 +822,17 @@ void SpatialExpanderAudioProcessor::handleAsyncUpdate()
 
         stft.setNumOutputs (numSpecOut);
 
-        int overlapFactor = fftSize / hopSize;
-
-        int firstOutput = currentBlockSize * ((fftSize + (overlapFactor - 1) * hopSize - 1) / currentBlockSize);
-        int inherentDelay = fftSize - hopSize;
-
-        int actualDelay   = firstOutput - inherentDelay;
-        delaySize         = fftSize - actualDelay;
-        if (delaySize < 0) delaySize = 0;
-        delayCapacity   = std::max (delaySize, currentBlockSize) * 4;
-        delayBufs.resize (numSpecOut);
-        for (auto& buf : delayBufs)
-            buf.assign (delayCapacity, 0.0f);
-        delayWritePos   = 0;
+        delaySize = 0;
+        delayCapacity = 0;
+        delayBufs.clear();
+        delayWritePos = 0;
 
         if (newOrder > 0)
         {
             float cutoff = apvts.getRawParameterValue ("lfeCutoff")->load();
-            lfe.prepare (getSampleRate(), fftSize, cutoff);
+            lfe.prepare (getSampleRate(), fftSize - hopSize, cutoff);
             prevLfeCutoff = cutoff;
-            setLatencySamples (fftSize);
+            setLatencySamples (fftSize - hopSize);
         }
 
         chOutputs.resize (numSpecOut);
