@@ -65,7 +65,7 @@ void StereoSTFT::setWindowSize (int newFftOrder)
 
     fftOrder = newFftOrder;
     fftSize  = 1 << fftOrder;
-    hopSize  = fftSize / 8;
+    hopSize  = fftSize / 32;
 
     fft = std::make_unique<juce::dsp::FFT> (fftOrder);
     allocateBuffers();

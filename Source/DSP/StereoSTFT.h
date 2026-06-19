@@ -21,7 +21,7 @@ public:
 
     int fftOrder = 9;
     int fftSize  = 512;
-    int hopSize  = 64;
+    int hopSize  = 16;
     int numOutputs = 3;
 
     class FrameListener
