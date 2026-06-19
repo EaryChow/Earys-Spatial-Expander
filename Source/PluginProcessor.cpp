@@ -1524,11 +1524,16 @@ void SpatialExpanderAudioProcessor::runCalibration()
         g *= globalGain;
 }
 
+int SpatialExpanderAudioProcessor::getLatencySamplesForMode (int modeIndex) noexcept
+{
+    int fftSize = 1 << (9 + modeIndex);
+    return fftSize - fftSize / 32;
+}
+
 double SpatialExpanderAudioProcessor::getLatencyMs() const noexcept
 {
     auto idx = static_cast<int> (apvts.getRawParameterValue ("latency")->load());
-    int samples[] = { 512, 1024, 2048, 4096 };
-    return static_cast<double> (samples[idx]) / getSampleRate() * 1000.0;
+    return static_cast<double> (getLatencySamplesForMode (idx)) / getSampleRate() * 1000.0;
 }
 
 bool SpatialExpanderAudioProcessor::hasEditor() const

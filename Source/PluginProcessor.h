@@ -41,6 +41,7 @@ public:
     juce::AudioProcessorValueTreeState& getAPVTS() { return apvts; }
 
     double getLatencyMs() const noexcept;
+    static int getLatencySamplesForMode (int modeIndex) noexcept;
 
     juce::String getInputWarningText() const;
     juce::String getFormatWarningText (int selectedFormat) const;
