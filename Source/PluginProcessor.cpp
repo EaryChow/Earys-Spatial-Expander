@@ -1130,7 +1130,9 @@ void SpatialExpanderAudioProcessor::onFrame (const float* fftL, const float* fft
         float rawGain = gainTable[static_cast<size_t> (idx)];
 
         // Smooth calibration gain across frames to avoid pumping artifacts
-        float decay = std::exp (-static_cast<float> (stft.hopSize) / (static_cast<float> (getSampleRate()) * 0.25f));
+        // Fixed-frame time constant ensures consistent response across all latency modes.
+        const float frameTimeConst = 100.0f;
+        float decay = std::exp (-1.0f / frameTimeConst);
         smoothedCalGain = decay * smoothedCalGain + (1.0f - decay) * rawGain;
 
         auto applyGain = [&](float* buf, int size)
@@ -1399,33 +1401,49 @@ void SpatialExpanderAudioProcessor::runCalibration()
 
     // 1. Generate pink noise with 0 dB true peak
     // Fixed duration ensures consistent peak statistics across FFT sizes.
+    // Spectral-method pink noise for accurate -3 dB/oct spectrum.
     const int calDuration = 65536;
     std::vector<float> pinkL (calDuration), pinkR (calDuration);
 
-    std::mt19937 rng2 (12345);
-    std::uniform_real_distribution<float> white (-1.0f, 1.0f);
-    float accL = 0.0f, accR = 0.0f;
-    const float leak = 0.995f;
-    for (int i = 0; i < calDuration; ++i)
     {
-        accL = leak * accL + white (rng2);
-        accR = leak * accR + white (rng2);
-        pinkL[i] = accL;
-        pinkR[i] = accR;
-    }
+        auto genPink = [&](std::vector<float>& buf, int seed)
+        {
+            juce::dsp::FFT pinkFFT (16);
+            std::vector<float> spec (static_cast<size_t> (calDuration) * 2, 0.0f);
+            std::mt19937 rng (seed);
+            std::uniform_real_distribution<float> pd (0.0f, 2.0f * juce::MathConstants<float>::pi);
 
-    // Normalize to 0 dB true peak
-    float inputPeak = 0.0f;
-    for (int i = 0; i < calDuration; ++i)
-    {
-        inputPeak = std::max (inputPeak, std::abs (pinkL[i]));
-        inputPeak = std::max (inputPeak, std::abs (pinkR[i]));
-    }
-    float norm = 1.0f / inputPeak;
-    for (int i = 0; i < calDuration; ++i)
-    {
-        pinkL[i] *= norm;
-        pinkR[i] *= norm;
+            for (int k = 0; k <= calDuration / 2; ++k)
+            {
+                float mag = (k == 0) ? 1.0f : 1.0f / std::sqrt (static_cast<float> (k));
+                float phase = pd (rng);
+                float re = mag * std::cos (phase);
+                float im = mag * std::sin (phase);
+
+                if (k == 0)
+                    spec[0] = re;
+                else if (k == calDuration / 2)
+                    spec[1] = re;
+                else
+                {
+                    size_t idx = static_cast<size_t> (k) * 2;
+                    spec[idx]     = re;
+                    spec[idx + 1] = im;
+                }
+            }
+
+            pinkFFT.performRealOnlyInverseTransform (spec.data());
+
+            float peak = 0.0f;
+            for (int i = 0; i < calDuration; ++i)
+                peak = std::max (peak, std::abs (spec[i]));
+            float norm = 1.0f / peak;
+            for (int i = 0; i < calDuration; ++i)
+                buf[i] = spec[i] * norm;
+        };
+
+        genPink (pinkL, 42);
+        genPink (pinkR, 99);
     }
 
     // 2. Temporarily install the new table so onFrame uses it
