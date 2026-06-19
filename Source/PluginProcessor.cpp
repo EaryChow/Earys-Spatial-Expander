@@ -28,7 +28,7 @@ SpatialExpanderAudioProcessor::SpatialExpanderAudioProcessor()
               juce::NormalisableRange<float> (0.0f, 1.0f, 0.01f), 1.0f),
           std::make_unique<juce::AudioParameterFloat> ("preamp", "Preamp",
               juce::NormalisableRange<float> (-6.0f, 6.0f, 0.1f), 0.0f),
-          std::make_unique<juce::AudioParameterBool> ("rearIsolation", "5.1 Rear Channel Isolation", false),
+          std::make_unique<juce::AudioParameterBool> ("rearIsolation", "Rear Isolation", false),
           std::make_unique<juce::AudioParameterFloat> ("chOffC", "Center Offset",
               juce::NormalisableRange<float> (-12.0f, 12.0f, 0.1f), 0.0f),
           std::make_unique<juce::AudioParameterFloat> ("chOffFL", "Front L Offset",
