@@ -132,7 +132,7 @@ SpatialExpanderAudioProcessorEditor::SpatialExpanderAudioProcessorEditor (
     addAndMakeVisible (warningLabel);
 
     // Advanced panel
-    advancedToggle.setButtonText ("Advanced");
+    advancedToggle.setButtonText ("Per-Channel Gain");
     advancedToggle.setToggleState (false, juce::dontSendNotification);
     addAndMakeVisible (advancedToggle);
     advancedToggle.onClick = [this] { updateAdvancedPanel(); };
@@ -265,8 +265,9 @@ void SpatialExpanderAudioProcessorEditor::resized()
     // latencyResultLabel.setBounds (measArea.reduced (2));
 
     // Advanced panel
+    area.removeFromTop (16);
     auto advArea = area.removeFromTop (24);
-    advancedToggle.setBounds (advArea.reduced (60, 0));
+    advancedToggle.setBounds (advArea.reduced (10, 0));
 
     if (advancedToggle.getToggleState())
     {
