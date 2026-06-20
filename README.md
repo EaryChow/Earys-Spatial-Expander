@@ -39,7 +39,7 @@ Open the plugin UI and choose your target layout:
 | Format | Spatial Channels | Description |
 |--------|------------------|-------------|
 | **Auto** | Detected from bus | Reads the bus layout automatically. |
-| **3.0** | Center, Front L, Front R | Minimal upmix. LFE is still generated. |
+| **3.0** | Center, Front L, Front R | Minimal upmix. |
 | **5.1** | + Rear L, Rear R | Classic surround. |
 | **7.1** | + Side L, Side R | Adds side speakers between front and rear. |
 | **9.1** | + Wide L, Wide R | Adds wide speakers between front and side. (requires 9.1.6 bus container)|
