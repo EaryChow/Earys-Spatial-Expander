@@ -26,7 +26,7 @@ SpatialExpanderAudioProcessorEditor::SpatialExpanderAudioProcessorEditor (
     addAndMakeVisible (lfeLevelLabel);
 
     lfeLevelSlider.setSliderStyle (juce::Slider::LinearHorizontal);
-    lfeLevelSlider.setTextBoxStyle (juce::Slider::TextBoxRight, true, 60, 20);
+    lfeLevelSlider.setTextBoxStyle (juce::Slider::TextBoxRight, false, 60, 20);
     lfeLevelSlider.setRange (-12.1, 12.0, 0.1);
     addAndMakeVisible (lfeLevelSlider);
     lfeLevelAttach = std::make_unique<juce::AudioProcessorValueTreeState::SliderAttachment>(
@@ -81,7 +81,7 @@ SpatialExpanderAudioProcessorEditor::SpatialExpanderAudioProcessorEditor (
     addAndMakeVisible (preampLabel);
 
     preampSlider.setSliderStyle (juce::Slider::LinearHorizontal);
-    preampSlider.setTextBoxStyle (juce::Slider::TextBoxRight, true, 60, 20);
+    preampSlider.setTextBoxStyle (juce::Slider::TextBoxRight, false, 60, 20);
     preampSlider.setRange (-6.0, 6.0, 0.1);
     addAndMakeVisible (preampSlider);
     preampAttach = std::make_unique<juce::AudioProcessorValueTreeState::SliderAttachment>(
@@ -149,7 +149,7 @@ SpatialExpanderAudioProcessorEditor::SpatialExpanderAudioProcessorEditor (
     {
         auto& sld = chOffSliders[i];
         sld.setSliderStyle (juce::Slider::LinearHorizontal);
-        sld.setTextBoxStyle (juce::Slider::TextBoxRight, true, 50, 20);
+        sld.setTextBoxStyle (juce::Slider::TextBoxRight, false, 50, 20);
         sld.setRange (-12.0, 12.0, 0.1);
         sld.textFromValueFunction = [] (double v) { return juce::String (v, 1) + " dB"; };
         sld.valueFromTextFunction = [] (const juce::String& t) { return t.getDoubleValue(); };
