@@ -17,12 +17,6 @@ float LFEExtractor::Biquad::process (float x) noexcept
 void LFEExtractor::designBesselLowPass (double cutoff)
 {
     // 4th-order Bessel-Thomson lowpass via two cascaded biquads.
-    // Bessel polynomial θ₄(s) = s⁴ + 10s³ + 45s² + 105s + 105
-    // Poles (roots of θ₄):  -2.896±j1.336 and -2.104±j2.374
-    // -3dB frequency of θ₄ is ω₋₃dB = 2.115 rad/s (analog normalized)
-
-    // Section 1: ω₁ = 3.189, Q₁ = 0.551  → f₁ = fc·1.508
-    // Section 2: ω₂ = 3.172, Q₂ = 0.754  → f₂ = fc·1.500
     double fc = cutoff;
     double f1 = fc * 1.508;
     double f2 = fc * 1.500;
@@ -52,8 +46,7 @@ void LFEExtractor::designBesselLowPass (double cutoff)
 
 void LFEExtractor::computeGroupDelay()
 {
-    // DC group delay of 4th-order Bessel-Thomson scaled to cutoff fc:
-    // τ(0) = ω₋₃dB / (2π·fc) seconds, where ω₋₃dB = 2.115
+    // DC group delay of 4th-order Bessel-Thomson at cutoff fc
     double wc = 2.0 * juce::MathConstants<double>::pi * cutoff_;
     iirGroupDelay = static_cast<int> (std::round (sampleRate_ * 2.115 / wc));
 }

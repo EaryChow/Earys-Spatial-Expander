@@ -144,14 +144,11 @@ int SpatialExpanderAudioProcessor::detectFormatFromBus() const noexcept
     if (layout == juce::AudioChannelSet::create5point1())       return Fmt51;
     if (layout == juce::AudioChannelSet::createLCR())           return Fmt30;
 
-    // Discrete / unknown layout fallbacks by channel count.
-    // Conservative: prefer smaller bed formats to avoid generating
-    // spectral channels that have no physical destination.
-    if (n >= 16) return Fmt916;  // 9.1.6
-    if (n >= 14) return Fmt916;  // 9.1.4 (or 7.1.6 — 9.1 is the more common 14-ch bed)
-    if (n >= 12) return Fmt71;   // 7.1.4 or 9.1.2
-    if (n >= 10) return Fmt71;   // 7.1.2 or 9.1.0
-    if (n >= 8)  return Fmt51;   // 5.1.2 or 7.1 — prefer 5.1 (safer default)
+    if (n >= 16) return Fmt916;
+    if (n >= 14) return Fmt916;
+    if (n >= 12) return Fmt71;
+    if (n >= 10) return Fmt71;
+    if (n >= 8)  return Fmt51;
     if (n >= 6)  return Fmt51;
     return Fmt30;
 }
@@ -382,27 +379,7 @@ void SpatialExpanderAudioProcessor::processBlock (juce::AudioBuffer<float>& buff
             buffer.clear (c, 0, numSamples);
     }
 
-    // -----------------------------------------------------------------
-    // Hybrid routing: type-based primary with comprehensive aliases,
-    // index-based fallback for unknown/discrete channels.
-    //
-    // Comprehensive alias system:
-    //   WideL:  wideLeft (Atmos), leftCentre (ITU), leftSurround (last resort)
-    //   WideR:  wideRight (Atmos), rightCentre (ITU), rightSurround (last resort)
-    //   SideL:  leftSurroundSide (Atmos Lss), leftSurround (ITU Ls/generic),
-    //           leftSurroundRear (DAWs that swap side/rear naming)
-    //   SideR:  rightSurroundSide, rightSurround, rightSurroundRear
-    //   RearL:  leftSurroundRear (Atmos Lsr), leftSurround (ITU/generic),
-    //           leftSurroundSide (DAWs that swap side/rear naming)
-    //   RearR:  rightSurroundRear, rightSurround, rightSurroundSide
-    //
-    // Index fallback for 16-ch (user's DAW buffer order):
-    //   0-3:  L R C LFE
-    //   4-5:  RearL/R  (swapped - confirmed by user testing)
-    //   6-7:  SideL/R  (swapped - confirmed by user testing)
-    //   8-9:  WideL/R
-    //   10+:  top channels (unmapped)
-    // -----------------------------------------------------------------
+
     auto outputBus = getBus (false, 0);
     auto outputLayout = (outputBus != nullptr) ? outputBus->getCurrentLayout() : juce::AudioChannelSet();
     auto mainOutChannels = getMainBusNumOutputChannels();
@@ -1170,7 +1147,6 @@ void SpatialExpanderAudioProcessor::onFrame (const float* fftL, const float* fft
         float rawGain = gainTable[static_cast<size_t> (idx)];
 
         // Smooth calibration gain across frames to avoid pumping artifacts
-        // Fixed-frame time constant ensures consistent response across all latency modes.
         const float frameTimeConst = 100.0f;
         float decay = std::exp (-1.0f / frameTimeConst);
         smoothedCalGain = decay * smoothedCalGain + (1.0f - decay) * rawGain;

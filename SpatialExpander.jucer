@@ -17,8 +17,6 @@
       <FILE id="LFEEC" name="LFEExtractor.cpp" compile="1" resource="0" file="Source/DSP/LFEExtractor.cpp"/>
       <FILE id="SAH" name="SpatialAnalyser.h" compile="0" resource="0" file="Source/DSP/SpatialAnalyser.h"/>
       <FILE id="SAC" name="SpatialAnalyser.cpp" compile="1" resource="0" file="Source/DSP/SpatialAnalyser.cpp"/>
-      <FILE id="SRH" name="SpatialRenderer.h" compile="0" resource="0" file="Source/DSP/SpatialRenderer.h"/>
-      <FILE id="SRC" name="SpatialRenderer.cpp" compile="1" resource="0" file="Source/DSP/SpatialRenderer.cpp"/>
     </GROUP>
   </MAINGROUP>
   <MODULES>
