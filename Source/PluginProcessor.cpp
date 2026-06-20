@@ -21,7 +21,7 @@ SpatialExpanderAudioProcessor::SpatialExpanderAudioProcessor()
           std::make_unique<juce::AudioParameterChoice> ("outputFormat", "Output Format",
               juce::StringArray { "Auto", "3.0", "5.1", "7.1", "9.1" }, 0),
           std::make_unique<juce::AudioParameterChoice> ("latency", "Latency",
-              juce::StringArray { "496", "992", "1984", "3968" }, 3),
+              juce::StringArray { "496", "992", "1984", "3968" }, 1),
           std::make_unique<juce::AudioParameterFloat> ("leakCenter", "Leak Center",
               juce::NormalisableRange<float> (0.0f, 1.5f, 0.01f), 0.0f),
           std::make_unique<juce::AudioParameterFloat> ("stretch", "Stretch",

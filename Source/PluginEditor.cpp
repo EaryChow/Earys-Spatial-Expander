@@ -101,12 +101,12 @@ SpatialExpanderAudioProcessorEditor::SpatialExpanderAudioProcessorEditor (
     rearIsolationAttach = std::make_unique<juce::AudioProcessorValueTreeState::ButtonAttachment>(
         processor.getAPVTS(), "rearIsolation", rearIsolationButton);
 
-    latencyLabel.setText ("Latency", juce::dontSendNotification);
+    latencyLabel.setText ("Quality/Latency", juce::dontSendNotification);
     latencyLabel.setJustificationType (juce::Justification::centred);
     addAndMakeVisible (latencyLabel);
 
     updateLatencyComboBox();
-    latencyComboBox.setSelectedId (4);
+    latencyComboBox.setSelectedId (2);
     addAndMakeVisible (latencyComboBox);
     latencyAttach = std::make_unique<juce::AudioProcessorValueTreeState::ComboBoxAttachment>(
         processor.getAPVTS(), "latency", latencyComboBox);
@@ -371,12 +371,13 @@ void SpatialExpanderAudioProcessorEditor::updateLatencyComboBox()
 
     auto currentId = latencyComboBox.getSelectedId();
 
+    const char* qualityLabels[] = { "Low/", "Low-Mid/", "Mid/", "High/" };
     latencyComboBox.clear (juce::dontSendNotification);
     for (int i = 0; i < 4; ++i)
     {
         int latency = SpatialExpanderAudioProcessor::getLatencySamplesForMode (i);
         double ms = static_cast<double> (latency) / sr * 1000.0;
-        juce::String label = juce::String (latency) + " (" + juce::String (ms, 1) + " ms)";
+        juce::String label = juce::String (qualityLabels[i]) + juce::String (latency) + " (" + juce::String (ms, 1) + " ms)";
         latencyComboBox.addItem (label, i + 1);
     }
     latencyComboBox.setSelectedId (currentId, juce::dontSendNotification);
