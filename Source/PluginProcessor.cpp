@@ -414,7 +414,8 @@ void SpatialExpanderAudioProcessor::processBlock (juce::AudioBuffer<float>& buff
     bool is7_1 = (numSpecOut > 5 && numSpecOut <= 7);
     bool is9_1 = (numSpecOut > 7);
 
-    float lfeGain = (lfeLevelDb >= -12.0f) ? juce::Decibels::decibelsToGain (lfeLevelDb) : 0.0f;
+    static constexpr float lfePrescale = 0.355f; // -9 dB default
+    float lfeGain = (lfeLevelDb >= -12.0f) ? juce::Decibels::decibelsToGain (lfeLevelDb) * lfePrescale : 0.0f;
 
     std::vector<int> channelMap (mainOutChannels, -1);
     std::vector<bool> channelIsLFE (mainOutChannels, false);
