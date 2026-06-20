@@ -15,10 +15,6 @@ public:
     void process (const float* inL, const float* inR,
                   float** outputs, int numSamples);
 
-    int getLatencySamples() const noexcept { return fftSize; }
-    double getLatencyMs() const noexcept;
-    int getNumBins() const noexcept { return fftSize / 2 + 1; }
-
     int fftOrder = 9;
     int fftSize  = 512;
     int hopSize  = 16;
@@ -54,7 +50,6 @@ private:
     int outRp = 0;
     int outReady = 0;
     int framesCompleted = 0;
-    double sampleRate_ = 48000.0;
 
     FrameListener* frameListener = nullptr;
 

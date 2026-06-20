@@ -131,16 +131,17 @@ SpatialExpanderAudioProcessorEditor::SpatialExpanderAudioProcessorEditor (
     warningLabel.setJustificationType (juce::Justification::centred);
     addAndMakeVisible (warningLabel);
 
-    // Advanced panel
-    advancedToggle.setButtonText ("Per-Channel Gain");
-    advancedToggle.setToggleState (false, juce::dontSendNotification);
-    addAndMakeVisible (advancedToggle);
-    advancedToggle.onClick = [this] { updateAdvancedPanel(); };
+    // Per-Channel Gain panel
+    chGainToggle.setButtonText ("Per-Channel Gain");
+    chGainToggle.setToggleState (false, juce::dontSendNotification);
+    addAndMakeVisible (chGainToggle);
+    chGainToggle.onClick = [this] { updateChGainPanel(); };
 
-    advancedInfoLabel.setText ("For content-level balancing only. Room and speaker calibration should be done in your receiver or audio interface.", juce::dontSendNotification);
-    advancedInfoLabel.setFont (juce::Font (juce::FontOptions (11.0f)));
-    advancedInfoLabel.setJustificationType (juce::Justification::centred);
-    advancedInfoLabel.setColour (juce::Label::textColourId, juce::Colours::grey);
+    chGainInfoLabel.setText ("For content-level balancing only. Room and speaker calibration should be done in your receiver or audio interface.", juce::dontSendNotification);
+    chGainInfoLabel.setFont (juce::Font (juce::FontOptions (11.0f)));
+    chGainInfoLabel.setJustificationType (juce::Justification::centred);
+    chGainInfoLabel.setColour (juce::Label::textColourId, juce::Colours::grey);
+    addAndMakeVisible (chGainInfoLabel);
 
     const char* chNames[] = { "Center", "Front L", "Front R", "Wide L", "Wide R", "Side L", "Side R", "Rear L", "Rear R" };
     const char* chParamIds[] = { "chOffC", "chOffFL", "chOffFR", "chOffWL", "chOffWR", "chOffSL", "chOffSR", "chOffRL", "chOffRR" };
@@ -166,7 +167,7 @@ SpatialExpanderAudioProcessorEditor::SpatialExpanderAudioProcessorEditor (
     }
 
     updateFormatComboBox();
-    updateAdvancedPanel();
+    updateChGainPanel();
 
     setSize (550, 570);
     startTimerHz (4);
@@ -177,9 +178,9 @@ SpatialExpanderAudioProcessorEditor::~SpatialExpanderAudioProcessorEditor()
     stopTimer();
 }
 
-void SpatialExpanderAudioProcessorEditor::updateAdvancedPanel()
+void SpatialExpanderAudioProcessorEditor::updateChGainPanel()
 {
-    bool show = advancedToggle.getToggleState();
+    bool show = chGainToggle.getToggleState();
 
     int numSpecOut = processor.getNumSpectralOutputs();
     bool hasRear  = numSpecOut > 3;
@@ -195,7 +196,7 @@ void SpatialExpanderAudioProcessorEditor::updateAdvancedPanel()
     visible[7] = show && hasRear;
     visible[8] = show && hasRear;
 
-    advancedInfoLabel.setVisible (show);
+    chGainInfoLabel.setVisible (show);
 
     for (int i = 0; i < numChOff; ++i)
     {
@@ -209,7 +210,7 @@ void SpatialExpanderAudioProcessorEditor::updateAdvancedPanel()
         int extraRows = 0;
         for (int i = 0; i < numChOff; ++i)
             if (visible[i]) ++extraRows;
-        int newH = 570 + 24 + static_cast<int> (advancedInfoLabel.getFont().getHeight()) + 6 + extraRows * 34 + 10;
+        int newH = 570 + 24 + static_cast<int> (chGainInfoLabel.getFont().getHeight()) + 6 + extraRows * 34 + 10;
         setSize (550, newH);
     }
     else
@@ -264,15 +265,15 @@ void SpatialExpanderAudioProcessorEditor::resized()
     // measureButton.setBounds (measArea.removeFromLeft (120).reduced (2));
     // latencyResultLabel.setBounds (measArea.reduced (2));
 
-    // Advanced panel
+    // Per-Channel Gain panel
     area.removeFromTop (16);
     auto advArea = area.removeFromTop (24);
-    advancedToggle.setBounds (advArea.reduced (10, 0));
+    chGainToggle.setBounds (advArea.reduced (10, 0));
 
-    if (advancedToggle.getToggleState())
+    if (chGainToggle.getToggleState())
     {
-        auto infoArea = area.removeFromTop (static_cast<int> (advancedInfoLabel.getFont().getHeight()) + 6);
-        advancedInfoLabel.setBounds (infoArea.reduced (10, 0));
+        auto infoArea = area.removeFromTop (static_cast<int> (chGainInfoLabel.getFont().getHeight()) + 6);
+        chGainInfoLabel.setBounds (infoArea.reduced (10, 0));
 
         for (int i = 0; i < numChOff; ++i)
         {
@@ -337,11 +338,11 @@ void SpatialExpanderAudioProcessorEditor::timerCallback()
     //     }
     // }
 
-    // Refresh advanced panel if format changed while open
-    if (advancedToggle.getToggleState() && numSpecOut != lastDetectedFormat)
+    // Refresh gain panel if format changed while open
+    if (chGainToggle.getToggleState() && numSpecOut != lastDetectedFormat)
     {
         lastDetectedFormat = numSpecOut;
-        updateAdvancedPanel();
+        updateChGainPanel();
     }
 }
 

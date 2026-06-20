@@ -8,7 +8,6 @@ public:
     ~SpatialAnalyser() = default;
 
     void prepare (int fftSize);
-    void reset();
 
     void onFrame (const float* fftL, const float* fftR,
                   float* fftC, float* fftLres, float* fftRres,

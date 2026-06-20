@@ -7,10 +7,6 @@ void SpatialAnalyser::prepare (int /*fftSize*/)
 {
 }
 
-void SpatialAnalyser::reset()
-{
-}
-
 void SpatialAnalyser::onFrame (const float* fftL, const float* fftR,
                                 float* fftC, float* fftLres, float* fftRres,
                                 int fftSize)

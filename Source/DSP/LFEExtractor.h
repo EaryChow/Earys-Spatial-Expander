@@ -13,8 +13,6 @@ public:
     void process (const float* inL, const float* inR,
                   float* outLFE, int numSamples);
 
-    int getLatencySamples() const noexcept { return totalLatency; }
-
 private:
     void designBesselLowPass (double cutoff);
     void computeGroupDelay();
@@ -34,7 +32,6 @@ private:
     int writePos = 0;
     int effectiveExtraDelay = 0;
     int iirGroupDelay = 0;
-    int totalLatency = 0;
 
     double sampleRate_ = 48000.0;
     double cutoff_ = 80.0;

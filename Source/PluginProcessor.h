@@ -40,7 +40,6 @@ public:
 
     juce::AudioProcessorValueTreeState& getAPVTS() { return apvts; }
 
-    double getLatencyMs() const noexcept;
     static int getLatencySamplesForMode (int modeIndex) noexcept;
 
     juce::String getInputWarningText() const;
@@ -97,12 +96,6 @@ private:
     std::vector<std::vector<float>> chOutputs;
     std::vector<float*> chOutputPtrs;
     std::vector<float> chLFE;
-
-    std::vector<std::vector<float>> delayBufs;
-    std::vector<float> delayScratch;
-    int delayWritePos = 0;
-    int delaySize = 0;
-    int delayCapacity = 0;
 
     float prevLfeCutoff = 80.0f;
 

@@ -63,7 +63,6 @@ void LFEExtractor::prepare (double sampleRate, int stftLatencySamples, double cu
 
     int extra = stftLatencySamples - iirGroupDelay;
     effectiveExtraDelay = std::max (0, extra);
-    totalLatency = stftLatencySamples;
     jassert (extra >= 0);
 }
 

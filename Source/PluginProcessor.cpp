@@ -184,11 +184,6 @@ void SpatialExpanderAudioProcessor::prepareToPlay (double sampleRate, int sample
     int fftSize   = stft.fftSize;
     int hopSize   = stft.hopSize;
 
-    delaySize = 0;
-    delayCapacity = 0;
-    delayBufs.clear();
-    delayWritePos = 0;
-
     int actualLatency = fftSize - hopSize;
     float cutoff = apvts.getRawParameterValue ("lfeCutoff")->load();
     lfe.prepare (sampleRate, actualLatency, cutoff);
@@ -799,11 +794,6 @@ void SpatialExpanderAudioProcessor::handleAsyncUpdate()
         int hopSize = stft.hopSize;
 
         stft.setNumOutputs (numSpecOut);
-
-        delaySize = 0;
-        delayCapacity = 0;
-        delayBufs.clear();
-        delayWritePos = 0;
 
         if (newOrder > 0)
         {
@@ -1505,12 +1495,6 @@ int SpatialExpanderAudioProcessor::getLatencySamplesForMode (int modeIndex) noex
 {
     int fftSize = 1 << (9 + modeIndex);
     return fftSize - fftSize / 32;
-}
-
-double SpatialExpanderAudioProcessor::getLatencyMs() const noexcept
-{
-    auto idx = static_cast<int> (apvts.getRawParameterValue ("latency")->load());
-    return static_cast<double> (getLatencySamplesForMode (idx)) / getSampleRate() * 1000.0;
 }
 
 bool SpatialExpanderAudioProcessor::hasEditor() const

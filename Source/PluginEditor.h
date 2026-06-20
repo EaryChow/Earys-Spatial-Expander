@@ -57,14 +57,14 @@ private:
 
     static constexpr int numChOff = 9;
 
-    juce::ToggleButton advancedToggle;
-    juce::Label advancedInfoLabel;
+    juce::ToggleButton chGainToggle;
+    juce::Label chGainInfoLabel;
 
     juce::Slider chOffSliders[numChOff];
     juce::Label chOffLabels[numChOff];
     std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> chOffAttachments[numChOff];
 
-    void updateAdvancedPanel();
+    void updateChGainPanel();
 
     // measurement UI hidden, logic kept in processor for future use
     // juce::TextButton measureButton;

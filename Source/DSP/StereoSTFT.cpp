@@ -51,9 +51,8 @@ void StereoSTFT::setNumOutputs (int n)
     }
 }
 
-void StereoSTFT::prepare (double sampleRate)
+void StereoSTFT::prepare (double)
 {
-    sampleRate_ = sampleRate;
     allocateBuffers();
     reset();
 }
@@ -89,11 +88,6 @@ void StereoSTFT::reset()
     outRp = fftSize - hopSize;
     outReady = 0;
     framesCompleted = 0;
-}
-
-double StereoSTFT::getLatencyMs() const noexcept
-{
-    return static_cast<double> (fftSize) / sampleRate_ * 1000.0;
 }
 
 void StereoSTFT::process (const float* inL, const float* inR,
