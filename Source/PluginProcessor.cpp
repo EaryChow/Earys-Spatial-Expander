@@ -30,7 +30,8 @@ SpatialExpanderAudioProcessor::SpatialExpanderAudioProcessor()
               juce::NormalisableRange<float> (0.0f, 1.0f, 0.01f), 1.0f),
           std::make_unique<juce::AudioParameterFloat> ("preamp", "Preamp",
               juce::NormalisableRange<float> (-6.0f, 6.0f, 0.1f), 0.0f),
-          std::make_unique<juce::AudioParameterBool> ("rearBias", "Rear Bias", true),
+          std::make_unique<juce::AudioParameterFloat> ("rearBias", "Rear Bias",
+              juce::NormalisableRange<float> (0.0f, 1.0f, 0.01f), 0.5f),
           std::make_unique<juce::AudioParameterFloat> ("chOffC", "Center Offset",
               juce::NormalisableRange<float> (-12.0f, 12.0f, 0.1f), 0.0f),
           std::make_unique<juce::AudioParameterFloat> ("chOffFL", "Front L Offset",
@@ -967,11 +968,12 @@ void SpatialExpanderAudioProcessor::doCascade (const float* fftL, const float* f
     // Layer 2 right: Extract FrontR, RearR, Center from Rres, tempC
     analyser.onFrame (cascadeRresSave.data(), fftTemp, fftFrontR, fftRearR, fftCenter, fftSize);
 
-    bool rearBias = apvts.getRawParameterValue ("rearBias")->load() > 0.5f;
-    if (rearBias)
+    // --- Rear Bias: blend between extracted rear (0) and raw residual (1) ---
+    float rearBias = apvts.getRawParameterValue ("rearBias")->load();
+    for (int i = 0; i < fftSize; ++i)
     {
-        std::copy (cascadeLresSave.begin(), cascadeLresSave.end(), fftRearL);
-        std::copy (cascadeRresSave.begin(), cascadeRresSave.end(), fftRearR);
+        fftRearL[i] = fftRearL[i] * (1.0f - rearBias) + cascadeLresSave[i] * rearBias;
+        fftRearR[i] = fftRearR[i] * (1.0f - rearBias) + cascadeRresSave[i] * rearBias;
     }
 
     if (numSpecOut <= 5)

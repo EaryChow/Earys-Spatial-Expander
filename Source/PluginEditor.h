@@ -52,8 +52,9 @@ private:
     juce::Label preampLabel;
     std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> preampAttach;
 
-    juce::ToggleButton rearBiasButton;
-    std::unique_ptr<juce::AudioProcessorValueTreeState::ButtonAttachment> rearBiasAttach;
+    juce::Slider rearBiasSlider;
+    juce::Label rearBiasLabel;
+    std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> rearBiasAttach;
 
     juce::Slider crosstalkSlider;
     juce::Label crosstalkLabel;

@@ -106,11 +106,16 @@ SpatialExpanderAudioProcessorEditor::SpatialExpanderAudioProcessorEditor (
         return text.getDoubleValue();
     };
 
-    rearBiasButton.setButtonText ("Rear Bias");
-    rearBiasButton.setToggleState (true, juce::dontSendNotification);
-    addAndMakeVisible (rearBiasButton);
-    rearBiasAttach = std::make_unique<juce::AudioProcessorValueTreeState::ButtonAttachment>(
-        processor.getAPVTS(), "rearBias", rearBiasButton);
+    rearBiasLabel.setText ("Rear Bias", juce::dontSendNotification);
+    rearBiasLabel.setJustificationType (juce::Justification::centred);
+    addAndMakeVisible (rearBiasLabel);
+
+    rearBiasSlider.setSliderStyle (juce::Slider::LinearHorizontal);
+    rearBiasSlider.setTextBoxStyle (juce::Slider::TextBoxRight, false, 50, 20);
+    rearBiasSlider.setRange (0.0, 1.0, 0.01);
+    addAndMakeVisible (rearBiasSlider);
+    rearBiasAttach = std::make_unique<juce::AudioProcessorValueTreeState::SliderAttachment>(
+        processor.getAPVTS(), "rearBias", rearBiasSlider);
 
     latencyLabel.setText ("Quality/Latency", juce::dontSendNotification);
     latencyLabel.setJustificationType (juce::Justification::centred);
@@ -180,7 +185,7 @@ SpatialExpanderAudioProcessorEditor::SpatialExpanderAudioProcessorEditor (
     updateFormatComboBox();
     updateChGainPanel();
 
-    setSize (550, 620);
+    setSize (550, 640);
     startTimerHz (4);
 }
 
@@ -221,12 +226,12 @@ void SpatialExpanderAudioProcessorEditor::updateChGainPanel()
         int extraRows = 0;
         for (int i = 0; i < numChOff; ++i)
             if (visible[i]) ++extraRows;
-        int newH = 620 + 24 + static_cast<int> (chGainInfoLabel.getFont().getHeight()) + 6 + extraRows * 34 + 10;
+        int newH = 640 + 24 + static_cast<int> (chGainInfoLabel.getFont().getHeight()) + 6 + extraRows * 34 + 10;
         setSize (550, newH);
     }
     else
     {
-        setSize (550, 620);
+        setSize (550, 640);
     }
 }
 
@@ -261,11 +266,12 @@ void SpatialExpanderAudioProcessorEditor::resized()
     stretchSlider.setBounds (sl.reduced (5));
 
     sl = area.removeFromTop (50);
+    rearBiasLabel.setBounds (sl.removeFromLeft (100));
+    rearBiasSlider.setBounds (sl.reduced (5));
+
+    sl = area.removeFromTop (50);
     preampLabel.setBounds (sl.removeFromLeft (100));
     preampSlider.setBounds (sl.reduced (5));
-
-    sl = area.removeFromTop (30);
-    rearBiasButton.setBounds (sl.reduced (10, 0));
 
     auto fmtArea = area.removeFromTop (45);
     formatLabel.setBounds (fmtArea.removeFromTop (20));
