@@ -24,11 +24,13 @@ SpatialExpanderAudioProcessor::SpatialExpanderAudioProcessor()
               juce::StringArray { "496", "992", "1984", "3968" }, 1),
           std::make_unique<juce::AudioParameterFloat> ("leakCenter", "Leak Center",
               juce::NormalisableRange<float> (0.0f, 1.5f, 0.01f), 0.0f),
+          std::make_unique<juce::AudioParameterFloat> ("crosstalk", "Crosstalk",
+              juce::NormalisableRange<float> (0.0f, 0.5f, 0.01f), 0.2f),
           std::make_unique<juce::AudioParameterFloat> ("stretch", "Stretch",
               juce::NormalisableRange<float> (0.0f, 1.0f, 0.01f), 1.0f),
           std::make_unique<juce::AudioParameterFloat> ("preamp", "Preamp",
               juce::NormalisableRange<float> (-6.0f, 6.0f, 0.1f), 0.0f),
-          std::make_unique<juce::AudioParameterBool> ("rearIsolation", "Rear Isolation", false),
+          std::make_unique<juce::AudioParameterBool> ("rearBias", "Rear Bias", true),
           std::make_unique<juce::AudioParameterFloat> ("chOffC", "Center Offset",
               juce::NormalisableRange<float> (-12.0f, 12.0f, 0.1f), 0.0f),
           std::make_unique<juce::AudioParameterFloat> ("chOffFL", "Front L Offset",
@@ -334,6 +336,87 @@ void SpatialExpanderAudioProcessor::processBlock (juce::AudioBuffer<float>& buff
                 chOutputs[1][i] += cOrig * sideAmount;
                 chOutputs[2][i] += cOrig * sideAmount;
             }
+        }
+    }
+
+    // --- Crosstalk: leak each speaker's signal to adjacent speakers ---
+    float crosstalkVal = apvts.getRawParameterValue ("crosstalk")->load();
+    if (crosstalkVal > 0.0f && numSpecOut > 3)
+    {
+        float leak = std::sqrt (crosstalkVal);
+        float d1   = std::sqrt (1.0f + crosstalkVal);
+        float d2   = std::sqrt (1.0f + 2.0f * crosstalkVal);
+
+        for (int i = 0; i < numSamples; ++i)
+        {
+            float orig[9];
+            for (int ch = 0; ch < numSpecOut; ++ch)
+                orig[ch] = chOutputs[ch][i];
+
+            float newVals[9] = {};
+
+            for (int ch = 0; ch < numSpecOut; ++ch)
+            {
+                int N = 0;
+                if (numSpecOut <= 5)
+                {
+                    if (ch == 1 || ch == 2 || ch == 3 || ch == 4) N = 1;
+                }
+                else if (numSpecOut <= 7)
+                {
+                    if (ch == 1 || ch == 2 || ch == 5 || ch == 6) N = 1;
+                    if (ch == 3 || ch == 4) N = 2;
+                }
+                else
+                {
+                    if (ch == 1 || ch == 2 || ch == 7 || ch == 8) N = 1;
+                    if (ch == 3 || ch == 4 || ch == 5 || ch == 6) N = 2;
+                }
+
+                if (N > 0)
+                    newVals[ch] = orig[ch] / ((N == 1) ? d1 : d2);
+                else
+                    newVals[ch] = orig[ch];
+            }
+
+            if (numSpecOut <= 5)
+            {
+                newVals[3] += orig[1] * leak / d1;
+                newVals[1] += orig[3] * leak / d1;
+                newVals[4] += orig[2] * leak / d1;
+                newVals[2] += orig[4] * leak / d1;
+            }
+            else if (numSpecOut <= 7)
+            {
+                newVals[3] += orig[1] * leak / d1;
+                newVals[1] += orig[3] * leak / d2;
+                newVals[5] += orig[3] * leak / d2;
+                newVals[3] += orig[5] * leak / d1;
+
+                newVals[4] += orig[2] * leak / d1;
+                newVals[2] += orig[4] * leak / d2;
+                newVals[6] += orig[4] * leak / d2;
+                newVals[4] += orig[6] * leak / d1;
+            }
+            else
+            {
+                newVals[3] += orig[1] * leak / d1;
+                newVals[1] += orig[3] * leak / d2;
+                newVals[5] += orig[3] * leak / d2;
+                newVals[3] += orig[5] * leak / d2;
+                newVals[7] += orig[5] * leak / d2;
+                newVals[5] += orig[7] * leak / d1;
+
+                newVals[4] += orig[2] * leak / d1;
+                newVals[2] += orig[4] * leak / d2;
+                newVals[6] += orig[4] * leak / d2;
+                newVals[4] += orig[6] * leak / d2;
+                newVals[8] += orig[6] * leak / d2;
+                newVals[6] += orig[8] * leak / d1;
+            }
+
+            for (int ch = 0; ch < numSpecOut; ++ch)
+                chOutputs[ch][i] = newVals[ch];
         }
     }
 
@@ -884,8 +967,8 @@ void SpatialExpanderAudioProcessor::doCascade (const float* fftL, const float* f
     // Layer 2 right: Extract FrontR, RearR, Center from Rres, tempC
     analyser.onFrame (cascadeRresSave.data(), fftTemp, fftFrontR, fftRearR, fftCenter, fftSize);
 
-    bool rearIsolation = apvts.getRawParameterValue ("rearIsolation")->load() > 0.5f;
-    if (!rearIsolation)
+    bool rearBias = apvts.getRawParameterValue ("rearBias")->load() > 0.5f;
+    if (rearBias)
     {
         std::copy (cascadeLresSave.begin(), cascadeLresSave.end(), fftRearL);
         std::copy (cascadeRresSave.begin(), cascadeRresSave.end(), fftRearR);

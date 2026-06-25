@@ -52,8 +52,12 @@ private:
     juce::Label preampLabel;
     std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> preampAttach;
 
-    juce::ToggleButton rearIsolationButton;
-    std::unique_ptr<juce::AudioProcessorValueTreeState::ButtonAttachment> rearIsolationAttach;
+    juce::ToggleButton rearBiasButton;
+    std::unique_ptr<juce::AudioProcessorValueTreeState::ButtonAttachment> rearBiasAttach;
+
+    juce::Slider crosstalkSlider;
+    juce::Label crosstalkLabel;
+    std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> crosstalkAttach;
 
     static constexpr int numChOff = 9;
 

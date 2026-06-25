@@ -65,6 +65,17 @@ SpatialExpanderAudioProcessorEditor::SpatialExpanderAudioProcessorEditor (
     leakCenterAttach = std::make_unique<juce::AudioProcessorValueTreeState::SliderAttachment>(
         processor.getAPVTS(), "leakCenter", leakCenterSlider);
 
+    crosstalkLabel.setText ("Crosstalk", juce::dontSendNotification);
+    crosstalkLabel.setJustificationType (juce::Justification::centred);
+    addAndMakeVisible (crosstalkLabel);
+
+    crosstalkSlider.setSliderStyle (juce::Slider::LinearHorizontal);
+    crosstalkSlider.setTextBoxStyle (juce::Slider::TextBoxRight, false, 50, 20);
+    crosstalkSlider.setRange (0.0, 0.5, 0.01);
+    addAndMakeVisible (crosstalkSlider);
+    crosstalkAttach = std::make_unique<juce::AudioProcessorValueTreeState::SliderAttachment>(
+        processor.getAPVTS(), "crosstalk", crosstalkSlider);
+
     stretchLabel.setText ("Stretch", juce::dontSendNotification);
     stretchLabel.setJustificationType (juce::Justification::centred);
     addAndMakeVisible (stretchLabel);
@@ -95,11 +106,11 @@ SpatialExpanderAudioProcessorEditor::SpatialExpanderAudioProcessorEditor (
         return text.getDoubleValue();
     };
 
-    rearIsolationButton.setButtonText ("Rear Isolation");
-    rearIsolationButton.setToggleState (false, juce::dontSendNotification);
-    addAndMakeVisible (rearIsolationButton);
-    rearIsolationAttach = std::make_unique<juce::AudioProcessorValueTreeState::ButtonAttachment>(
-        processor.getAPVTS(), "rearIsolation", rearIsolationButton);
+    rearBiasButton.setButtonText ("Rear Bias");
+    rearBiasButton.setToggleState (true, juce::dontSendNotification);
+    addAndMakeVisible (rearBiasButton);
+    rearBiasAttach = std::make_unique<juce::AudioProcessorValueTreeState::ButtonAttachment>(
+        processor.getAPVTS(), "rearBias", rearBiasButton);
 
     latencyLabel.setText ("Quality/Latency", juce::dontSendNotification);
     latencyLabel.setJustificationType (juce::Justification::centred);
@@ -169,7 +180,7 @@ SpatialExpanderAudioProcessorEditor::SpatialExpanderAudioProcessorEditor (
     updateFormatComboBox();
     updateChGainPanel();
 
-    setSize (550, 570);
+    setSize (550, 620);
     startTimerHz (4);
 }
 
@@ -210,12 +221,12 @@ void SpatialExpanderAudioProcessorEditor::updateChGainPanel()
         int extraRows = 0;
         for (int i = 0; i < numChOff; ++i)
             if (visible[i]) ++extraRows;
-        int newH = 570 + 24 + static_cast<int> (chGainInfoLabel.getFont().getHeight()) + 6 + extraRows * 34 + 10;
+        int newH = 620 + 24 + static_cast<int> (chGainInfoLabel.getFont().getHeight()) + 6 + extraRows * 34 + 10;
         setSize (550, newH);
     }
     else
     {
-        setSize (550, 570);
+        setSize (550, 620);
     }
 }
 
@@ -242,6 +253,10 @@ void SpatialExpanderAudioProcessorEditor::resized()
     leakCenterSlider.setBounds (sl.reduced (5));
 
     sl = area.removeFromTop (50);
+    crosstalkLabel.setBounds (sl.removeFromLeft (100));
+    crosstalkSlider.setBounds (sl.reduced (5));
+
+    sl = area.removeFromTop (50);
     stretchLabel.setBounds (sl.removeFromLeft (100));
     stretchSlider.setBounds (sl.reduced (5));
 
@@ -250,7 +265,7 @@ void SpatialExpanderAudioProcessorEditor::resized()
     preampSlider.setBounds (sl.reduced (5));
 
     sl = area.removeFromTop (30);
-    rearIsolationButton.setBounds (sl.reduced (10, 0));
+    rearBiasButton.setBounds (sl.reduced (10, 0));
 
     auto fmtArea = area.removeFromTop (45);
     formatLabel.setBounds (fmtArea.removeFromTop (20));
