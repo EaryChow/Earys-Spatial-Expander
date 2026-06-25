@@ -1418,39 +1418,42 @@ void SpatialExpanderAudioProcessor::runCalibration()
     int numBinsHalf = fftSize / 2 + 1;
     int numSpecOut = getNumSpectralOutputs();
 
-    // Build pink noise spectrum
-    std::vector<float> pinkMag (static_cast<size_t> (numBinsHalf));
-    double totalPinkPower = 0.0;
-    for (int k = 0; k < numBinsHalf; ++k)
-    {
-        pinkMag[static_cast<size_t> (k)] = (k == 0) ? 1.0f
-            : 1.0f / std::sqrt (static_cast<float> (k));
-        totalPinkPower += static_cast<double> (pinkMag[static_cast<size_t> (k)])
-                        * static_cast<double> (pinkMag[static_cast<size_t> (k)]);
-    }
-    double invNorm = 1.0 / std::sqrt (totalPinkPower);
-    for (int k = 0; k < numBinsHalf; ++k)
-        pinkMag[static_cast<size_t> (k)] *= static_cast<float> (invNorm);
-
+    // Build white noise spectrum (flat spectrum, independent L/R)
     std::mt19937 rng (12345);
     std::uniform_real_distribution<float> phaseDist (0.0f,
         2.0f * juce::MathConstants<float>::pi);
 
-    std::vector<float> noiseSpec (static_cast<size_t> (numBinsFull) * 2, 0.0f);
+    float whiteNorm = 1.0f / std::sqrt (static_cast<float> (numBinsHalf));
+
+    std::vector<float> noiseSpecL (static_cast<size_t> (numBinsFull) * 2, 0.0f);
+    std::vector<float> noiseSpecR (static_cast<size_t> (numBinsFull) * 2, 0.0f);
+
     for (int k = 0; k < numBinsHalf; ++k)
     {
-        float phase = phaseDist (rng);
-        float re = pinkMag[static_cast<size_t> (k)] * std::cos (phase);
-        float im = pinkMag[static_cast<size_t> (k)] * std::sin (phase);
+        float phaseL = phaseDist (rng);
+        float phaseR = phaseDist (rng);
+        float reL = whiteNorm * std::cos (phaseL);
+        float imL = whiteNorm * std::sin (phaseL);
+        float reR = whiteNorm * std::cos (phaseR);
+        float imR = whiteNorm * std::sin (phaseR);
+
         if (k == 0)
-            noiseSpec[0] = re;
+        {
+            noiseSpecL[0] = reL;
+            noiseSpecR[0] = reR;
+        }
         else if (k == fftSize / 2)
-            noiseSpec[1] = re;
+        {
+            noiseSpecL[1] = reL;
+            noiseSpecR[1] = reR;
+        }
         else
         {
             size_t idx = static_cast<size_t> (k) * 2;
-            noiseSpec[idx]     = re;
-            noiseSpec[idx + 1] = im;
+            noiseSpecL[idx]     = reL;
+            noiseSpecL[idx + 1] = imL;
+            noiseSpecR[idx]     = reR;
+            noiseSpecR[idx + 1] = imR;
         }
     }
 
@@ -1481,8 +1484,8 @@ void SpatialExpanderAudioProcessor::runCalibration()
 
         for (int k = 0; k < numBinsFull; ++k)
         {
-            fftL[static_cast<size_t> (k)] = noiseSpec[static_cast<size_t> (k)] * panL;
-            fftR[static_cast<size_t> (k)] = noiseSpec[static_cast<size_t> (k)] * panR;
+            fftL[static_cast<size_t> (k)] = noiseSpecL[static_cast<size_t> (k)] * panL;
+            fftR[static_cast<size_t> (k)] = noiseSpecR[static_cast<size_t> (k)] * panR;
         }
 
         // Run cascade

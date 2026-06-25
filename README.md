@@ -186,8 +186,8 @@ This is applied in the frequency domain before calibration.
 Because the cascade naturally changes total loudness as a source pans (a center-panned source splits into multiple correlated channels), the plugin runs an internal **automatic calibration** at startup and whenever you change format, latency, or stretch.
 
 **Two-pass process:**
-1. **ILD power calibration:** Generate pink noise, sweep the pan from hard-left to hard-right in 1 dB ILD steps. At each step, run the full cascade and measure the total output power. Build a gain table `G[ILD]` that normalizes every pan position to the same perceived loudness.
-2. **True-peak safety pass:** Run a true-peak white noise signal through the entire STFT pipeline with the new gain table. Measure the highest output peak, then scale the entire table so the true peak sits at **−0.1 dB**. This prevents clipping.
+1. **ILD power calibration:** Generate white noise with independent L/R phases, sweep the pan from hard-left to hard-right in 1 dB ILD steps. At each step, run the full cascade and measure the total output power. Build a gain table `G[ILD]` that normalizes every pan position to the same perceived loudness. White noise ensures all frequency bins contribute equally to the measurement, and independent L/R phases match the statistical properties of real stereo content.
+2. **True-peak safety pass:** Run a true-peak white noise signal (independent L/R) through the entire STFT pipeline with the new gain table. Measure the highest output peak, then scale the entire table so the true peak sits at **−0.1 dB**. This prevents clipping.
 
 During playback, the plugin computes the ILD independently for every FFT bin, looks up the corresponding gain from the calibration table, and applies that gain only to that bin. A soft confidence gate based on the bin's energy relative to the frame peak gracefully fades the correction to unity for quiet bins, preventing grain on reverb tails. There is no temporal smoothing across frames—the STFT's 32× overlap-add provides natural temporal continuity. The result is a spectral shaper rather than a dynamics processor: no pumping, no broadband ducking.
 
