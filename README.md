@@ -111,8 +111,11 @@ Gain of the LFE channel. Range: **−12.0 dB to +12.0 dB**. Default: **0.0 dB**.
 ### Preamp
 Input gain. Range: **−6.0 dB to +6.0 dB**. Applied before the STFT. Useful for gain-staging quiet or hot sources into the extractor.
 
-### Rear Isolation
-Controls how the rear channels are derived. When on, the rear channels are produced just like the front L/R, fully isolated from the "center" signal. When off, it will have some remaining correlation with the adjacent channels. Default is off, it would give a stronger presence for the rear channels, this is an creative choice. But if you find the rear channels to have too strong of a presence, you can turn it on. 
+### Rear Bias
+Controls how the rear channels are derived. At **0.0**, the rear channels are fully isolated from the center signal, giving maximum clarity. At **1.0**, the raw unextracted residual is used, giving the rear channels a stronger, more ambient presence. The default **0.5** blends both for a smooth transition. Lower values give cleaner rear imaging; higher values give more envelopment. This is for creative control.
+
+### Crosstalk
+Leaks each speaker's signal to its adjacent neighbors for smoother panning transitions. Range: **0.0 – 0.5**. Default: **0.2**. At 0, channels are completely discrete. Higher values create a more blended, continuous surround field. Applied after calibration using the same loudness-preserving formula as Leak Center.
 
 ### Per-Channel Gain
 Click **"Per-Channel Gain"** to reveal individual ±12 dB trims for every speaker channel:
@@ -186,15 +189,15 @@ Because the cascade naturally changes total loudness as a source pans (a center-
 1. **ILD power calibration:** Generate pink noise, sweep the pan from hard-left to hard-right in 1 dB ILD steps. At each step, run the full cascade and measure the total output power. Build a gain table `G[ILD]` that normalizes every pan position to the same perceived loudness.
 2. **True-peak safety pass:** Run a true-peak pink noise signal through the entire STFT pipeline with the new gain table. Measure the highest output peak, then scale the entire table so the true peak sits at **−0.1 dB**. This prevents clipping.
 
-During playback, the plugin estimates the input ILD for each STFT frame and applies the corresponding uniform gain to all channels. This keeps the mix level-stable regardless of how sources are panned.
+During playback, the plugin computes the ILD independently for every FFT bin, looks up the corresponding gain from the calibration table, and applies that gain only to that bin. A soft confidence gate based on the bin's energy relative to the frame peak gracefully fades the correction to unity for quiet bins, preventing grain on reverb tails. There is no temporal smoothing across frames—the STFT's 32× overlap-add provides natural temporal continuity. The result is a spectral shaper rather than a dynamics processor: no pumping, no broadband ducking.
 
 ### 7. LFE Extraction
 The LFE channel is derived from `(L+R)/2` passed through a **4th-order Bessel-Thomson low-pass filter** (two cascaded biquads). Bessel-Thomson was chosen because it has maximally flat group delay, making fixed-delay compensation accurate across the passband.
 
 The LFE path is delayed by a compensation line so that its total latency matches the plugin's reported latency, keeping it sample-aligned with the main channels.
 
-### 8. Leak Center & Output
-After the iSTFT, **Leak Center** redistributes the calibrated Center signal to Front L/R using a constant-power split. Finally, channels are mapped to your DAW's output bus using standard channel type identifiers (Left, Right, Centre, LFE, Side, Rear, Wide, etc.) with intelligent index fallbacks for discrete/custom layouts.
+### 8. Leak Center, Crosstalk & Output
+After the iSTFT, **Leak Center** redistributes the calibrated Center signal to Front L/R using a constant-power split. **Crosstalk** then leaks each speaker's signal to its adjacent neighbors (e.g., Front L → Wide L → Side L → Rear L) using the same loudness-preserving formula, smoothing spatial transitions. Finally, channels are mapped to your DAW's output bus using standard channel type identifiers (Left, Right, Centre, LFE, Side, Rear, Wide, etc.) with intelligent index fallbacks for discrete/custom layouts.
 
 ---
 
