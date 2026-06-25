@@ -116,6 +116,10 @@ private:
     std::vector<float> cascadeRresSave;
     int cascadeFftSize = 0;
 
+    // Per-bin static calibration gains (no temporal smoothing)
+    std::vector<float> binCalGains;
+    std::vector<float> binCalGainsSmoothed;
+
     std::atomic<float>* chOffParams[9] = {};
 
     // Latency measurement state (audio-thread only after trigger)
@@ -127,8 +131,6 @@ private:
 
     std::vector<float> measInput;
     std::vector<std::vector<float>> measOutput;
-
-    float smoothedCalGain = 1.0f;
 
     juce::AudioProcessorValueTreeState apvts;
 

@@ -220,7 +220,9 @@ void SpatialExpanderAudioProcessor::prepareToPlay (double sampleRate, int sample
     cascadeLresSave.assign (cs, 0.0f);
     cascadeRresSave.assign (cs, 0.0f);
 
-    smoothedCalGain = 1.0f;
+    binCalGains.resize (cs / 2 + 1, 1.0f);
+    binCalGainsSmoothed.resize (cs / 2 + 1, 1.0f);
+
     runCalibration();
 }
 
@@ -829,6 +831,9 @@ void SpatialExpanderAudioProcessor::handleAsyncUpdate()
         cascadeTemp.assign (fftSize, 0.0f);
         cascadeLresSave.assign (fftSize, 0.0f);
         cascadeRresSave.assign (fftSize, 0.0f);
+
+        binCalGains.resize (fftSize / 2 + 1, 1.0f);
+        binCalGainsSmoothed.resize (fftSize / 2 + 1, 1.0f);
     }
 
     runCalibration();
@@ -1100,68 +1105,129 @@ void SpatialExpanderAudioProcessor::onFrame (const float* fftL, const float* fft
 
     // Center is left as-is (already extracted with coherent L+R phase)
 
-    // Calibration gain from ILD
+    // --- Per-bin static calibration gain ---
+    // No temporal smoothing across frames; the STFT's 32x overlap provides ~10 ms
+    // effective smoothing via the synthesis window.
     if (!gainTable.empty())
     {
-        double sumL2 = 0.0, sumR2 = 0.0;
-
-        sumL2 += static_cast<double> (fftL[0]) * static_cast<double> (fftL[0]);
-        sumR2 += static_cast<double> (fftR[0]) * static_cast<double> (fftR[0]);
-
-        sumL2 += static_cast<double> (fftL[1]) * static_cast<double> (fftL[1]);
-        sumR2 += static_cast<double> (fftR[1]) * static_cast<double> (fftR[1]);
-
-        for (int k = 1; k < fftSize / 2; ++k)
+        // Step 1: Compute frame peak energy for noise gate
+        float framePeakEnergy = 0.0f;
+        for (int k = 0; k <= fftSize / 2; ++k)
         {
-            size_t idx = static_cast<size_t> (k) * 2;
-            double lRe = fftL[idx], lIm = fftL[idx + 1];
-            double rRe = fftR[idx], rIm = fftR[idx + 1];
-            sumL2 += lRe * lRe + lIm * lIm;
-            sumR2 += rRe * rRe + rIm * rIm;
+            float l2, r2;
+            if (k == 0)
+            {
+                l2 = static_cast<float> (fftL[0]) * static_cast<float> (fftL[0]);
+                r2 = static_cast<float> (fftR[0]) * static_cast<float> (fftR[0]);
+            }
+            else if (k == fftSize / 2)
+            {
+                l2 = static_cast<float> (fftL[1]) * static_cast<float> (fftL[1]);
+                r2 = static_cast<float> (fftR[1]) * static_cast<float> (fftR[1]);
+            }
+            else
+            {
+                size_t idx = static_cast<size_t> (k) * 2;
+                float lRe = fftL[idx], lIm = fftL[idx + 1];
+                float rRe = fftR[idx], rIm = fftR[idx + 1];
+                l2 = lRe * lRe + lIm * lIm;
+                r2 = rRe * rRe + rIm * rIm;
+            }
+            framePeakEnergy = std::max (framePeakEnergy, l2 + r2);
         }
 
-        float ildDb;
-        if (sumL2 < 1e-18 && sumR2 < 1e-18)
-            ildDb = 0.0f;
-        else if (sumL2 < 1e-18)
-            ildDb = -60.0f;
-        else if (sumR2 < 1e-18)
-            ildDb = 60.0f;
-        else
-            ildDb = 10.0f * std::log10 (static_cast<float> (sumL2 / sumR2));
-
-        ildDb = std::max (-60.0f, std::min (60.0f, ildDb));
-        int idx = static_cast<int> (std::round (ildDb)) + 60;
-        idx = std::max (0, std::min (ildTableSize - 1, idx));
-
-        float rawGain = gainTable[static_cast<size_t> (idx)];
-
-        // Smooth calibration gain across frames to avoid pumping artifacts
-        const float frameTimeConst = 100.0f;
-        float decay = std::exp (-1.0f / frameTimeConst);
-        smoothedCalGain = decay * smoothedCalGain + (1.0f - decay) * rawGain;
-
-        auto applyGain = [&](float* buf, int size)
+        // Step 2: Compute per-bin gain
+        for (int k = 0; k <= fftSize / 2; ++k)
         {
-            for (int i = 0; i < size; ++i)
-                buf[i] *= smoothedCalGain;
+            float l2, r2;
+            if (k == 0)
+            {
+                l2 = static_cast<float> (fftL[0]) * static_cast<float> (fftL[0]);
+                r2 = static_cast<float> (fftR[0]) * static_cast<float> (fftR[0]);
+            }
+            else if (k == fftSize / 2)
+            {
+                l2 = static_cast<float> (fftL[1]) * static_cast<float> (fftL[1]);
+                r2 = static_cast<float> (fftR[1]) * static_cast<float> (fftR[1]);
+            }
+            else
+            {
+                size_t idx = static_cast<size_t> (k) * 2;
+                float lRe = fftL[idx], lIm = fftL[idx + 1];
+                float rRe = fftR[idx], rIm = fftR[idx + 1];
+                l2 = lRe * lRe + lIm * lIm;
+                r2 = rRe * rRe + rIm * rIm;
+            }
+
+            float energy = l2 + r2;
+            float snr = energy / (framePeakEnergy + 1e-18f);
+            float confidence = std::min (1.0f, snr * 1e6f);
+
+            float rawGain = 1.0f;
+            if (energy > 1e-18f)
+            {
+                float ildDb;
+                if (l2 < 1e-18f && r2 < 1e-18f)
+                    ildDb = 0.0f;
+                else if (l2 < 1e-18f)
+                    ildDb = -60.0f;
+                else if (r2 < 1e-18f)
+                    ildDb = 60.0f;
+                else
+                    ildDb = 10.0f * std::log10 (l2 / r2);
+
+                ildDb = std::max (-60.0f, std::min (60.0f, ildDb));
+                int idx = static_cast<int> (std::round (ildDb)) + 60;
+                idx = std::max (0, std::min (ildTableSize - 1, idx));
+                rawGain = gainTable[static_cast<size_t> (idx)];
+            }
+
+            binCalGains[static_cast<size_t> (k)] = 1.0f + (rawGain - 1.0f) * confidence;
+        }
+
+        // Step 3: Optional 3-bin Gaussian spectral smoothing
+        if (fftSize >= 4)
+        {
+            binCalGainsSmoothed[0] = binCalGains[0];
+            binCalGainsSmoothed[static_cast<size_t> (fftSize / 2)] = binCalGains[static_cast<size_t> (fftSize / 2)];
+            for (int k = 1; k < fftSize / 2; ++k)
+            {
+                size_t uk = static_cast<size_t> (k);
+                binCalGainsSmoothed[uk] = 0.25f * binCalGains[uk - 1] + 0.5f * binCalGains[uk] + 0.25f * binCalGains[uk + 1];
+            }
+            binCalGains.swap (binCalGainsSmoothed);
+        }
+
+        // Step 4: Apply per-bin gain to all channels
+        auto applyBinGain = [&](float* buf, int size)
+        {
+            buf[0] *= binCalGains[0];
+            if (size > 2)
+                buf[1] *= binCalGains[static_cast<size_t> (size / 2)];
+            for (int k = 1; k < size / 2; ++k)
+            {
+                size_t idx = static_cast<size_t> (k) * 2;
+                float g = binCalGains[static_cast<size_t> (k)];
+                buf[idx] *= g;
+                buf[idx + 1] *= g;
+            }
         };
 
-        applyGain (cascadeCenter.data(), fftSize);
-        applyGain (cascadeFrontL.data(), fftSize);
-        applyGain (cascadeFrontR.data(), fftSize);
+        applyBinGain (cascadeCenter.data(), fftSize);
+        applyBinGain (cascadeFrontL.data(), fftSize);
+        applyBinGain (cascadeFrontR.data(), fftSize);
         if (numSpecOut > 7)
         {
-            applyGain (cascadeWideL.data(), fftSize);
-            applyGain (cascadeWideR.data(), fftSize);
+            applyBinGain (cascadeWideL.data(), fftSize);
+            applyBinGain (cascadeWideR.data(), fftSize);
         }
         if (numSpecOut > 5)
         {
-            applyGain (cascadeSideL.data(), fftSize);
-            applyGain (cascadeSideR.data(), fftSize);
+            applyBinGain (cascadeSideL.data(), fftSize);
+            applyBinGain (cascadeSideR.data(), fftSize);
         }
-        applyGain (cascadeRearL.data(), fftSize);
-        applyGain (cascadeRearR.data(), fftSize);
+        applyBinGain (cascadeRearL.data(), fftSize);
+        applyBinGain (cascadeRearR.data(), fftSize);
     }
 
     // Channel Offsets (post-calibration per-channel gain)
@@ -1401,27 +1467,30 @@ void SpatialExpanderAudioProcessor::runCalibration()
 
     // -----------------------------------------------------------------
     // Second pass: true peak measurement via full STFT pipeline.
-    // Generate 0 dB true peak pink noise, run it through a temporary
+    // Generate 0 dB true peak white noise, run it through a temporary
     // STFT with the current cascade + gainTable, measure output peak.
+    //
+    // White noise (flat spectrum) ensures all bins have roughly equal
+    // energy and all receive full confidence in the per-bin noise gate.
+    // Centered mono (pinkR = pinkL) means every bin has ILD = 0 dB,
+    // so all bins look up the same gain (gainTable[60]).
     // -----------------------------------------------------------------
 
-    // 1. Generate pink noise with 0 dB true peak
-    // Fixed duration ensures consistent peak statistics across FFT sizes.
-    // Spectral-method pink noise for accurate -3 dB/oct spectrum.
+    // 1. Generate white noise with 0 dB true peak (centered mono)
     const int calDuration = 65536;
     std::vector<float> pinkL (calDuration), pinkR (calDuration);
 
     {
-        auto genPink = [&](std::vector<float>& buf, int seed)
+        auto genWhite = [&](std::vector<float>& buf, int seed)
         {
-            juce::dsp::FFT pinkFFT (16);
+            juce::dsp::FFT whiteFFT (16);
             std::vector<float> spec (static_cast<size_t> (calDuration) * 2, 0.0f);
             std::mt19937 rng (seed);
             std::uniform_real_distribution<float> pd (0.0f, 2.0f * juce::MathConstants<float>::pi);
 
             for (int k = 0; k <= calDuration / 2; ++k)
             {
-                float mag = (k == 0) ? 1.0f : 1.0f / std::sqrt (static_cast<float> (k));
+                float mag = 1.0f;
                 float phase = pd (rng);
                 float re = mag * std::cos (phase);
                 float im = mag * std::sin (phase);
@@ -1438,7 +1507,7 @@ void SpatialExpanderAudioProcessor::runCalibration()
                 }
             }
 
-            pinkFFT.performRealOnlyInverseTransform (spec.data());
+            whiteFFT.performRealOnlyInverseTransform (spec.data());
 
             float peak = 0.0f;
             for (int i = 0; i < calDuration; ++i)
@@ -1448,8 +1517,8 @@ void SpatialExpanderAudioProcessor::runCalibration()
                 buf[i] = spec[i] * norm;
         };
 
-        genPink (pinkL, 42);
-        genPink (pinkR, 99);
+        genWhite (pinkL, 42);
+        pinkR = pinkL;  // Centered mono: ILD = 0 dB at every bin
     }
 
     // 2. Temporarily install the new table so onFrame uses it
