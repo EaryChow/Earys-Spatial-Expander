@@ -1472,13 +1472,13 @@ void SpatialExpanderAudioProcessor::runCalibration()
     //
     // White noise (flat spectrum) ensures all bins have roughly equal
     // energy and all receive full confidence in the per-bin noise gate.
-    // Centered mono (pinkR = pinkL) means every bin has ILD = 0 dB,
+    // Centered mono (noiseR = noiseL) means every bin has ILD = 0 dB,
     // so all bins look up the same gain (gainTable[60]).
     // -----------------------------------------------------------------
 
     // 1. Generate white noise with 0 dB true peak (centered mono)
     const int calDuration = 65536;
-    std::vector<float> pinkL (calDuration), pinkR (calDuration);
+    std::vector<float> noiseL (calDuration), noiseR (calDuration);
 
     {
         auto genWhite = [&](std::vector<float>& buf, int seed)
@@ -1517,8 +1517,8 @@ void SpatialExpanderAudioProcessor::runCalibration()
                 buf[i] = spec[i] * norm;
         };
 
-        genWhite (pinkL, 42);
-        pinkR = pinkL;  // Centered mono: ILD = 0 dB at every bin
+        genWhite (noiseL, 42);
+        noiseR = noiseL;  // Centered mono: ILD = 0 dB at every bin
     }
 
     // 2. Temporarily install the new table so onFrame uses it
@@ -1541,7 +1541,7 @@ void SpatialExpanderAudioProcessor::runCalibration()
         for (int ch = 0; ch < numSpecOut; ++ch)
             outPtrs[ch] = calOutputs[ch].data() + pos;
 
-        calSTFT.process (pinkL.data() + pos, pinkR.data() + pos,
+        calSTFT.process (noiseL.data() + pos, noiseR.data() + pos,
                          outPtrs.data(), calHop);
     }
 
