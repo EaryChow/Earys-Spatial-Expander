@@ -1548,26 +1548,29 @@ void SpatialExpanderAudioProcessor::runCalibration()
     }
     // -----------------------------------------------------------------
     // Second pass: true peak measurement via full STFT pipeline.
-    // Generate two independent 0 dB true peak pink noise signals,
+    // Generate two independent 0 dB true peak white noise signals,
     // run them through a temporary STFT with the current cascade +
     // gainTable, measure output peak.
+    //
+    // White noise (flat spectrum) ensures all FFT bins have roughly
+    // equal energy so the per-bin confidence gate passes uniformly.
     // -----------------------------------------------------------------
 
-    // 1. Generate pink noise with 0 dB true peak (independent L/R)
+    // 1. Generate white noise with 0 dB true peak (independent L/R)
     const int calDuration = 65536;
     std::vector<float> noiseL (calDuration), noiseR (calDuration);
 
     {
-        auto genPink = [&](std::vector<float>& buf, int seed)
+        auto genWhite = [&](std::vector<float>& buf, int seed)
         {
-            juce::dsp::FFT pinkFFT (16);
+            juce::dsp::FFT whiteFFT (16);
             std::vector<float> spec (static_cast<size_t> (calDuration) * 2, 0.0f);
             std::mt19937 rng (seed);
             std::uniform_real_distribution<float> pd (0.0f, 2.0f * juce::MathConstants<float>::pi);
 
             for (int k = 0; k <= calDuration / 2; ++k)
             {
-                float mag = (k == 0) ? 1.0f : 1.0f / std::sqrt (static_cast<float> (k));
+                float mag = 1.0f;
                 float phase = pd (rng);
 
                 float re = mag * std::cos (phase);
@@ -1585,7 +1588,7 @@ void SpatialExpanderAudioProcessor::runCalibration()
                 }
             }
 
-            pinkFFT.performRealOnlyInverseTransform (spec.data());
+            whiteFFT.performRealOnlyInverseTransform (spec.data());
 
             float peak = 0.0f;
             for (int i = 0; i < calDuration; ++i)
@@ -1595,8 +1598,8 @@ void SpatialExpanderAudioProcessor::runCalibration()
                 buf[i] = spec[i] * norm;
         };
 
-        genPink (noiseL, 42);
-        genPink (noiseR, 99);
+        genWhite (noiseL, 42);
+        genWhite (noiseR, 99);
     }
 
     // 2. Temporarily install the new table so onFrame uses it
