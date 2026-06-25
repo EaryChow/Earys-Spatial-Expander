@@ -1384,7 +1384,6 @@ void SpatialExpanderAudioProcessor::runCalibration()
     std::vector<float> fftTemp (static_cast<size_t> (numBinsFull) * 2, 0.0f);
 
     std::vector<float> newTable (static_cast<size_t> (ildTableSize));
-    double refPower = 0.0;
     float stretch = apvts.getRawParameterValue ("stretch")->load();
 
     for (int iIdx = 0; iIdx < ildTableSize; ++iIdx)
@@ -1458,11 +1457,9 @@ void SpatialExpanderAudioProcessor::runCalibration()
                         + measurePower (fftRearR.data());
         }
 
-        if (iIdx == 0)
-            refPower = totalPower;
-
+        float inputPower = panL * panL + panR * panR;
         newTable[static_cast<size_t> (iIdx)] = (totalPower > 1e-18)
-            ? static_cast<float> (std::sqrt (refPower / totalPower)) : 1.0f;
+            ? static_cast<float> (std::sqrt (inputPower / totalPower)) : 1.0f;
     }
 
     // -----------------------------------------------------------------
