@@ -1418,42 +1418,34 @@ void SpatialExpanderAudioProcessor::runCalibration()
     int numBinsHalf = fftSize / 2 + 1;
     int numSpecOut = getNumSpectralOutputs();
 
-    // Build white noise spectrum (flat spectrum, independent L/R)
+    // Build correlated white noise spectrum (flat spectrum, identical L/R phase)
     std::mt19937 rng (12345);
     std::uniform_real_distribution<float> phaseDist (0.0f,
         2.0f * juce::MathConstants<float>::pi);
 
     float whiteNorm = 1.0f / std::sqrt (static_cast<float> (numBinsHalf));
 
-    std::vector<float> noiseSpecL (static_cast<size_t> (numBinsFull) * 2, 0.0f);
-    std::vector<float> noiseSpecR (static_cast<size_t> (numBinsFull) * 2, 0.0f);
+    std::vector<float> noiseSpec (static_cast<size_t> (numBinsFull) * 2, 0.0f);
 
     for (int k = 0; k < numBinsHalf; ++k)
     {
-        float phaseL = phaseDist (rng);
-        float phaseR = phaseDist (rng);
-        float reL = whiteNorm * std::cos (phaseL);
-        float imL = whiteNorm * std::sin (phaseL);
-        float reR = whiteNorm * std::cos (phaseR);
-        float imR = whiteNorm * std::sin (phaseR);
+        float phase = phaseDist (rng);
+        float re = whiteNorm * std::cos (phase);
+        float im = whiteNorm * std::sin (phase);
 
         if (k == 0)
         {
-            noiseSpecL[0] = reL;
-            noiseSpecR[0] = reR;
+            noiseSpec[0] = re;
         }
         else if (k == fftSize / 2)
         {
-            noiseSpecL[1] = reL;
-            noiseSpecR[1] = reR;
+            noiseSpec[1] = re;
         }
         else
         {
             size_t idx = static_cast<size_t> (k) * 2;
-            noiseSpecL[idx]     = reL;
-            noiseSpecL[idx + 1] = imL;
-            noiseSpecR[idx]     = reR;
-            noiseSpecR[idx + 1] = imR;
+            noiseSpec[idx]     = re;
+            noiseSpec[idx + 1] = im;
         }
     }
 
@@ -1484,8 +1476,8 @@ void SpatialExpanderAudioProcessor::runCalibration()
 
         for (int k = 0; k < numBinsFull; ++k)
         {
-            fftL[static_cast<size_t> (k)] = noiseSpecL[static_cast<size_t> (k)] * panL;
-            fftR[static_cast<size_t> (k)] = noiseSpecR[static_cast<size_t> (k)] * panR;
+            fftL[static_cast<size_t> (k)] = noiseSpec[static_cast<size_t> (k)] * panL;
+            fftR[static_cast<size_t> (k)] = noiseSpec[static_cast<size_t> (k)] * panR;
         }
 
         // Run cascade
