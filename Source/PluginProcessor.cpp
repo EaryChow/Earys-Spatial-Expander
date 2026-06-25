@@ -1544,34 +1544,30 @@ void SpatialExpanderAudioProcessor::runCalibration()
         newTable[static_cast<size_t> (iIdx)] = (totalPower > 1e-18)
             ? static_cast<float> (std::sqrt (inputPower / totalPower)) : 1.0f;
     }
-
     // -----------------------------------------------------------------
     // Second pass: true peak measurement via full STFT pipeline.
-    // Generate 0 dB true peak white noise, run it through a temporary
-    // STFT with the current cascade + gainTable, measure output peak.
-    //
-    // White noise (flat spectrum) ensures all bins have roughly equal
-    // energy and all receive full confidence in the per-bin noise gate.
-    // Centered mono (noiseR = noiseL) means every bin has ILD = 0 dB,
-    // so all bins look up the same gain (gainTable[60]).
+    // Generate two independent 0 dB true peak pink noise signals,
+    // run them through a temporary STFT with the current cascade +
+    // gainTable, measure output peak.
     // -----------------------------------------------------------------
 
-    // 1. Generate white noise with 0 dB true peak (centered mono)
+    // 1. Generate pink noise with 0 dB true peak (independent L/R)
     const int calDuration = 65536;
     std::vector<float> noiseL (calDuration), noiseR (calDuration);
 
     {
-        auto genWhite = [&](std::vector<float>& buf, int seed)
+        auto genPink = [&](std::vector<float>& buf, int seed)
         {
-            juce::dsp::FFT whiteFFT (16);
+            juce::dsp::FFT pinkFFT (16);
             std::vector<float> spec (static_cast<size_t> (calDuration) * 2, 0.0f);
             std::mt19937 rng (seed);
             std::uniform_real_distribution<float> pd (0.0f, 2.0f * juce::MathConstants<float>::pi);
 
             for (int k = 0; k <= calDuration / 2; ++k)
             {
-                float mag = 1.0f;
+                float mag = (k == 0) ? 1.0f : 1.0f / std::sqrt (static_cast<float> (k));
                 float phase = pd (rng);
+
                 float re = mag * std::cos (phase);
                 float im = mag * std::sin (phase);
 
@@ -1587,7 +1583,7 @@ void SpatialExpanderAudioProcessor::runCalibration()
                 }
             }
 
-            whiteFFT.performRealOnlyInverseTransform (spec.data());
+            pinkFFT.performRealOnlyInverseTransform (spec.data());
 
             float peak = 0.0f;
             for (int i = 0; i < calDuration; ++i)
@@ -1597,8 +1593,8 @@ void SpatialExpanderAudioProcessor::runCalibration()
                 buf[i] = spec[i] * norm;
         };
 
-        genWhite (noiseL, 42);
-        noiseR = noiseL;  // Centered mono: ILD = 0 dB at every bin
+        genPink (noiseL, 42);
+        genPink (noiseR, 99);
     }
 
     // 2. Temporarily install the new table so onFrame uses it
