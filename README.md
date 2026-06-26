@@ -183,13 +183,14 @@ The **Stretch** parameter remaps extracted channels to output speakers. At full 
 This is applied in the frequency domain before calibration.
 
 ### 6. Automatic Calibration
-Because the cascade naturally changes total loudness as a source pans (a center-panned source splits into multiple correlated channels), the plugin runs an internal **automatic calibration** at startup and whenever you change format, latency, or stretch.
+Because the cascade naturally changes total loudness as a source pans (a center-panned source splits into multiple correlated channels), the plugin runs an internal **automatic calibration** at startup and whenever you change format, latency, stretch, rear bias, or crosstalk.
 
-**Two-pass process:**
-1. **ILD power calibration:** Generate white noise with a flat spectrum and identical L/R phase (correlated), sweep the pan from hard-left to hard-right in 1 dB ILD steps. At each step, run the full cascade and measure the total output power. Build a gain table `G[ILD]` that normalizes every pan position to the same perceived loudness. Correlated white noise matches the statistical properties of mono and centered sources, ensuring consistent loudness across pan positions. The flat spectrum ensures all frequency bins are calibrated equally.
-2. **True-peak safety pass:** Run a true-peak white noise signal (independent L/R) through the entire STFT pipeline with the new gain table. Measure the highest output peak, then scale the entire table so the true peak sits at **−0.1 dB**. This prevents clipping.
+**Calibbration with perceptual weighting:**
+The plugin generates correlated white noise with a flat spectrum, sweeps the pan from hard-left to hard-right in 1 dB ILD steps, and runs the full cascade (including stretch, rear bias, and crosstalk) at each step. It measures the total output power using **ITU-R BS.1770-4 / BS.2051 perceptual channel weightings** (+1.5 dB for side/rear channels) so that phantom images between speakers sound equally loud, not just physically equal-energy. A gain table `G[ILD]` is built that normalizes every pan position to the same perceived loudness.
 
 During playback, the plugin computes the ILD independently for every FFT bin, looks up the corresponding gain from the calibration table, and applies that gain only to that bin. A soft confidence gate based on the bin's energy relative to the frame peak gracefully fades the correction to unity for quiet bins, preventing grain on reverb tails. There is no temporal smoothing across frames—the STFT's 32× overlap-add provides natural temporal continuity. The result is a spectral shaper rather than a dynamics processor: no pumping, no broadband ducking.
+
+There is no automatic peak limiter after calibration. If you are facing any clipping issue, use the preamp slider to adjust the input gain.
 
 ### 7. LFE Extraction
 The LFE channel is derived from `(L+R)/2` passed through a **4th-order Bessel-Thomson low-pass filter** (two cascaded biquads). Bessel-Thomson was chosen because it has maximally flat group delay, making fixed-delay compensation accurate across the passband.
@@ -197,7 +198,7 @@ The LFE channel is derived from `(L+R)/2` passed through a **4th-order Bessel-Th
 The LFE path is delayed by a compensation line so that its total latency matches the plugin's reported latency, keeping it sample-aligned with the main channels.
 
 ### 8. Leak Center, Crosstalk & Output
-After the iSTFT, **Leak Center** redistributes the calibrated Center signal to Front L/R using a constant-power split. **Crosstalk** then leaks each speaker's signal to its adjacent neighbors (e.g., Front L → Wide L → Side L → Rear L) using the same loudness-preserving formula, smoothing spatial transitions. Finally, channels are mapped to your DAW's output bus using standard channel type identifiers (Left, Right, Centre, LFE, Side, Rear, Wide, etc.) with intelligent index fallbacks for discrete/custom layouts.
+**Crosstalk** is applied inside the frequency-domain pipeline before calibration, so the gain table automatically compensates for any loudness change. It leaks each speaker's signal to its adjacent neighbors (e.g., Front L → Wide L → Side L → Rear L) using a loudness-preserving formula, smoothing spatial transitions. After the iSTFT, **Leak Center** redistributes the calibrated Center signal to the **Front L/R** speakers. Finally, channels are mapped to your DAW's output bus using standard channel type identifiers (Left, Right, Centre, LFE, Side, Rear, Wide, etc.) with intelligent index fallbacks for discrete/custom layouts.
 
 ---
 
