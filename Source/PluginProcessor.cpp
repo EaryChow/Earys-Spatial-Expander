@@ -1,8 +1,6 @@
 #include "PluginProcessor.h"
 #include "PluginEditor.h"
 
-static constexpr int chL = 0, chR = 1, chC = 2, chLFE = 3;
-
 SpatialExpanderAudioProcessor::SpatialExpanderAudioProcessor()
     : AudioProcessor (BusesProperties()
                       .withInput  ("Input",  juce::AudioChannelSet::stereo(), true)
@@ -55,6 +53,9 @@ SpatialExpanderAudioProcessor::SpatialExpanderAudioProcessor()
     stft.setFrameListener (this);
     apvts.addParameterListener ("latency", this);
     apvts.addParameterListener ("outputFormat", this);
+    apvts.addParameterListener ("rearBias", this);
+    apvts.addParameterListener ("crosstalk", this);
+    apvts.addParameterListener ("stretch", this);
 
     gainTable.resize (ildTableSize, 1.0f);
 }
@@ -337,87 +338,6 @@ void SpatialExpanderAudioProcessor::processBlock (juce::AudioBuffer<float>& buff
                 chOutputs[1][i] += cOrig * sideAmount;
                 chOutputs[2][i] += cOrig * sideAmount;
             }
-        }
-    }
-
-    // --- Crosstalk: leak each speaker's signal to adjacent speakers ---
-    float crosstalkVal = apvts.getRawParameterValue ("crosstalk")->load();
-    if (crosstalkVal > 0.0f && numSpecOut > 3)
-    {
-        float leak = std::sqrt (crosstalkVal);
-        float d1   = std::sqrt (1.0f + crosstalkVal);
-        float d2   = std::sqrt (1.0f + 2.0f * crosstalkVal);
-
-        for (int i = 0; i < numSamples; ++i)
-        {
-            float orig[9];
-            for (int ch = 0; ch < numSpecOut; ++ch)
-                orig[ch] = chOutputs[ch][i];
-
-            float newVals[9] = {};
-
-            for (int ch = 0; ch < numSpecOut; ++ch)
-            {
-                int N = 0;
-                if (numSpecOut <= 5)
-                {
-                    if (ch == 1 || ch == 2 || ch == 3 || ch == 4) N = 1;
-                }
-                else if (numSpecOut <= 7)
-                {
-                    if (ch == 1 || ch == 2 || ch == 5 || ch == 6) N = 1;
-                    if (ch == 3 || ch == 4) N = 2;
-                }
-                else
-                {
-                    if (ch == 1 || ch == 2 || ch == 7 || ch == 8) N = 1;
-                    if (ch == 3 || ch == 4 || ch == 5 || ch == 6) N = 2;
-                }
-
-                if (N > 0)
-                    newVals[ch] = orig[ch] / ((N == 1) ? d1 : d2);
-                else
-                    newVals[ch] = orig[ch];
-            }
-
-            if (numSpecOut <= 5)
-            {
-                newVals[3] += orig[1] * leak / d1;
-                newVals[1] += orig[3] * leak / d1;
-                newVals[4] += orig[2] * leak / d1;
-                newVals[2] += orig[4] * leak / d1;
-            }
-            else if (numSpecOut <= 7)
-            {
-                newVals[3] += orig[1] * leak / d1;
-                newVals[1] += orig[3] * leak / d2;
-                newVals[5] += orig[3] * leak / d2;
-                newVals[3] += orig[5] * leak / d1;
-
-                newVals[4] += orig[2] * leak / d1;
-                newVals[2] += orig[4] * leak / d2;
-                newVals[6] += orig[4] * leak / d2;
-                newVals[4] += orig[6] * leak / d1;
-            }
-            else
-            {
-                newVals[3] += orig[1] * leak / d1;
-                newVals[1] += orig[3] * leak / d2;
-                newVals[5] += orig[3] * leak / d2;
-                newVals[3] += orig[5] * leak / d2;
-                newVals[7] += orig[5] * leak / d2;
-                newVals[5] += orig[7] * leak / d1;
-
-                newVals[4] += orig[2] * leak / d1;
-                newVals[2] += orig[4] * leak / d2;
-                newVals[6] += orig[4] * leak / d2;
-                newVals[4] += orig[6] * leak / d2;
-                newVals[8] += orig[6] * leak / d2;
-                newVals[6] += orig[8] * leak / d1;
-            }
-
-            for (int ch = 0; ch < numSpecOut; ++ch)
-                chOutputs[ch][i] = newVals[ch];
         }
     }
 
@@ -854,10 +774,31 @@ void SpatialExpanderAudioProcessor::parameterChanged (const juce::String& parame
         fadeSamplesLeft.store (fadeSamplesTotal);
         calState.store (CalState::FadingOut);
     }
+    else if (parameterID == "rearBias" || parameterID == "crosstalk" || parameterID == "stretch")
+    {
+        if (calState.load() != CalState::Normal)
+            return;
+
+        pendingRecalibration.store (true);
+        fadeSamplesLeft.store (fadeSamplesTotal);
+        calState.store (CalState::FadingOut);
+    }
 }
 
 void SpatialExpanderAudioProcessor::handleAsyncUpdate()
 {
+    // Recalibration triggered by parameter changes that don't need
+    // full reconfiguration (rearBias, crosstalk, stretch)
+    bool recalibrate = pendingRecalibration.exchange (false);
+    if (recalibrate)
+    {
+        runCalibration();
+        updateHostDisplay();
+        fadeSamplesLeft.store (fadeSamplesTotal);
+        calState.store (CalState::FadingIn);
+        return;
+    }
+
     if (calState.load() != CalState::Reconfiguring)
         return;
 
@@ -1090,6 +1031,151 @@ void SpatialExpanderAudioProcessor::applyStretch (float* fftCenter, float* fftFr
     }
 }
 
+void SpatialExpanderAudioProcessor::applyCrosstalk (float* fftCenter, float* fftFrontL, float* fftFrontR,
+                                                     float* fftWideL, float* fftWideR,
+                                                     float* fftSideL, float* fftSideR,
+                                                     float* fftRearL, float* fftRearR,
+                                                     int fftSize, int numSpecOut, float crosstalkVal)
+{
+    if (crosstalkVal <= 0.0f || numSpecOut <= 3)
+        return;
+
+    float leak = std::sqrt (crosstalkVal);
+    float d1   = std::sqrt (1.0f + crosstalkVal);
+    float d2   = std::sqrt (1.0f + 2.0f * crosstalkVal);
+
+    // Channel weights: front/center = 1.0, everything else = 1.41
+    auto getWeight = [&](int ch) -> float
+    {
+        if (ch == 0 || ch == 1 || ch == 2) return 1.0f;
+        return 1.41f;
+    };
+
+    for (int i = 0; i < fftSize; ++i)
+    {
+        float orig[9] = {};
+        orig[0] = fftCenter[i];
+        orig[1] = fftFrontL[i];
+        orig[2] = fftFrontR[i];
+
+        if (numSpecOut > 7)
+        {
+            orig[3] = fftWideL[i];  orig[4] = fftWideR[i];
+            orig[5] = fftSideL[i];  orig[6] = fftSideR[i];
+            orig[7] = fftRearL[i];  orig[8] = fftRearR[i];
+        }
+        else if (numSpecOut > 5)
+        {
+            orig[3] = fftSideL[i];  orig[4] = fftSideR[i];
+            orig[5] = fftRearL[i];  orig[6] = fftRearR[i];
+        }
+        else if (numSpecOut > 3)
+        {
+            orig[3] = fftRearL[i];  orig[4] = fftRearR[i];
+        }
+
+        float newVals[9] = {};
+
+        // Self attenuation
+        for (int ch = 0; ch < numSpecOut; ++ch)
+        {
+            int N = 0;
+            if (numSpecOut <= 5)
+            {
+                if (ch == 1 || ch == 2 || ch == 3 || ch == 4) N = 1;
+            }
+            else if (numSpecOut <= 7)
+            {
+                if (ch == 1 || ch == 2 || ch == 5 || ch == 6) N = 1;
+                if (ch == 3 || ch == 4) N = 2;
+            }
+            else
+            {
+                if (ch == 1 || ch == 2 || ch == 7 || ch == 8) N = 1;
+                if (ch == 3 || ch == 4 || ch == 5 || ch == 6) N = 2;
+            }
+
+            if (N > 0)
+                newVals[ch] = orig[ch] / ((N == 1) ? d1 : d2);
+            else
+                newVals[ch] = orig[ch];
+        }
+
+        // Cross terms (same topology as before)
+        if (numSpecOut <= 5)
+        {
+            newVals[3] += orig[1] * leak / d1;
+            newVals[1] += orig[3] * leak / d1;
+            newVals[4] += orig[2] * leak / d1;
+            newVals[2] += orig[4] * leak / d1;
+        }
+        else if (numSpecOut <= 7)
+        {
+            newVals[3] += orig[1] * leak / d1;
+            newVals[1] += orig[3] * leak / d2;
+            newVals[5] += orig[3] * leak / d2;
+            newVals[3] += orig[5] * leak / d1;
+
+            newVals[4] += orig[2] * leak / d1;
+            newVals[2] += orig[4] * leak / d2;
+            newVals[6] += orig[4] * leak / d2;
+            newVals[4] += orig[6] * leak / d1;
+        }
+        else
+        {
+            newVals[3] += orig[1] * leak / d1;
+            newVals[1] += orig[3] * leak / d2;
+            newVals[5] += orig[3] * leak / d2;
+            newVals[3] += orig[5] * leak / d2;
+            newVals[7] += orig[5] * leak / d2;
+            newVals[5] += orig[7] * leak / d1;
+
+            newVals[4] += orig[2] * leak / d1;
+            newVals[2] += orig[4] * leak / d2;
+            newVals[6] += orig[4] * leak / d2;
+            newVals[4] += orig[6] * leak / d2;
+            newVals[8] += orig[6] * leak / d2;
+            newVals[6] += orig[8] * leak / d1;
+        }
+
+        // Weighted-power conservation
+        double wIn = 0.0, wOut = 0.0;
+        for (int ch = 0; ch < numSpecOut; ++ch)
+        {
+            float w = getWeight (ch);
+            wIn  += static_cast<double> (orig[ch])    * static_cast<double> (orig[ch])    * w;
+            wOut += static_cast<double> (newVals[ch]) * static_cast<double> (newVals[ch]) * w;
+        }
+
+        if (wOut > 1e-18)
+        {
+            float scale = static_cast<float> (std::sqrt (wIn / wOut));
+            for (int ch = 0; ch < numSpecOut; ++ch)
+                newVals[ch] *= scale;
+        }
+
+        // Write back
+        fftCenter[i]  = newVals[0];
+        fftFrontL[i]  = newVals[1];
+        fftFrontR[i]  = newVals[2];
+        if (numSpecOut > 7)
+        {
+            fftWideL[i]  = newVals[3];  fftWideR[i]  = newVals[4];
+            fftSideL[i]  = newVals[5];  fftSideR[i]  = newVals[6];
+            fftRearL[i]  = newVals[7];  fftRearR[i]  = newVals[8];
+        }
+        else if (numSpecOut > 5)
+        {
+            fftSideL[i] = newVals[3];  fftSideR[i] = newVals[4];
+            fftRearL[i] = newVals[5];  fftRearR[i] = newVals[6];
+        }
+        else if (numSpecOut > 3)
+        {
+            fftRearL[i] = newVals[3];  fftRearR[i] = newVals[4];
+        }
+    }
+}
+
 void SpatialExpanderAudioProcessor::onFrame (const float* fftL, const float* fftR,
                                               float** fftOutputs, int numOutputs,
                                               int fftSize)
@@ -1127,6 +1213,16 @@ void SpatialExpanderAudioProcessor::onFrame (const float* fftL, const float* fft
                   cascadeRearL.data(), cascadeRearR.data(),
                   fftSize, stretch, numSpecOut);
 
+    // Crosstalk (now in frequency domain so calibration sees it)
+    {
+        float crosstalkVal = apvts.getRawParameterValue ("crosstalk")->load();
+        applyCrosstalk (cascadeCenter.data(), cascadeFrontL.data(), cascadeFrontR.data(),
+                        cascadeWideL.data(), cascadeWideR.data(),
+                        cascadeSideL.data(), cascadeSideR.data(),
+                        cascadeRearL.data(), cascadeRearR.data(),
+                        fftSize, numSpecOut, crosstalkVal);
+    }
+
     // ---- Phase coherence restoration (post-cascade, pre-gain) ----
     // L-derived channels inherit L's original phase; R-derived inherit R's.
     // Magnitudes are untouched, so spatial mapping stays exact.
@@ -1154,8 +1250,8 @@ void SpatialExpanderAudioProcessor::onFrame (const float* fftL, const float* fft
             float outRe = outBuf[idx], outIm = outBuf[idx + 1];
             float refRe = phaseRef[idx], refIm = phaseRef[idx + 1];
 
-            float magOut = std::sqrt (outRe * outRe + outIm * outIm);
-            float magRef = std::sqrt (refRe * refRe + refIm * refIm);
+            magOut = std::sqrt (outRe * outRe + outIm * outIm);
+            magRef = std::sqrt (refRe * refRe + refIm * refIm);
 
             if (magRef > 1e-18f)
             {
@@ -1495,11 +1591,20 @@ void SpatialExpanderAudioProcessor::runCalibration()
                       fftRearL.data(), fftRearR.data(),
                       fftSize, stretch, numSpecOut);
 
+        // Crosstalk
+        {
+            float crosstalkVal = apvts.getRawParameterValue ("crosstalk")->load();
+            applyCrosstalk (fftCenter.data(), fftFrontL.data(), fftFrontR.data(),
+                            fftWideL.data(), fftWideR.data(),
+                            fftSideL.data(), fftSideR.data(),
+                            fftRearL.data(), fftRearR.data(),
+                            fftSize, numSpecOut, crosstalkVal);
+        }
+
         // ITU-R BS.1770-4 / BS.2051 perceptual weighting.
-        // Front/Center (|θ| < 60°) is the reference weight.
-        // Every other channel in this cascade — Wide, Side, and Rear —
-        // sits at or beyond 60° azimuth and needs +1.5 dB (×1.41 power)
-        // so the gain table attenuates them to match front loudness.
+        // Compute the effective perceptual weight for this ILD based on
+        // the energy distribution across channels.  This is per-ILD
+        // weighting, not per-channel speaker calibration.
         static constexpr double wFront    = 1.0;
         static constexpr double wSurround = 1.41;   // +1.5 dB
 
@@ -1518,129 +1623,49 @@ void SpatialExpanderAudioProcessor::runCalibration()
             return power;
         };
 
-        double totalPower = measurePower (fftCenter.data())  * wFront
-                          + measurePower (fftFrontL.data()) * wFront
-                          + measurePower (fftFrontR.data()) * wFront;
+        // Measure raw channel powers
+        double pC  = measurePower (fftCenter.data());
+        double pFL = measurePower (fftFrontL.data());
+        double pFR = measurePower (fftFrontR.data());
+        double pWL = 0.0, pWR = 0.0, pSL = 0.0, pSR = 0.0, pRL = 0.0, pRR = 0.0;
 
         if (numSpecOut > 7)
         {
-            totalPower += measurePower (fftWideL.data())  * wSurround
-                        + measurePower (fftWideR.data())  * wSurround
-                        + measurePower (fftSideL.data())  * wSurround
-                        + measurePower (fftSideR.data())  * wSurround
-                        + measurePower (fftRearL.data())  * wSurround
-                        + measurePower (fftRearR.data())  * wSurround;
+            pWL = measurePower (fftWideL.data());  pWR = measurePower (fftWideR.data());
+            pSL = measurePower (fftSideL.data());  pSR = measurePower (fftSideR.data());
+            pRL = measurePower (fftRearL.data());  pRR = measurePower (fftRearR.data());
         }
         else if (numSpecOut > 5)
         {
-            totalPower += measurePower (fftSideL.data())  * wSurround
-                        + measurePower (fftSideR.data())  * wSurround
-                        + measurePower (fftRearL.data())  * wSurround
-                        + measurePower (fftRearR.data())  * wSurround;
+            pSL = measurePower (fftSideL.data());  pSR = measurePower (fftSideR.data());
+            pRL = measurePower (fftRearL.data());  pRR = measurePower (fftRearR.data());
         }
         else if (numSpecOut > 3)
         {
-            totalPower += measurePower (fftRearL.data())  * wSurround
-                        + measurePower (fftRearR.data())  * wSurround;
+            pRL = measurePower (fftRearL.data());  pRR = measurePower (fftRearR.data());
         }
+
+        // Effective perceptual weight for this ILD:
+        // weighted sum / unweighted sum — gives a single scalar representing
+        // how much louder this ILD sounds than front.
+        double unweightedSum = pC + pFL + pFR + pWL + pWR + pSL + pSR + pRL + pRR;
+        double weightedSum   = pC*wFront + pFL*wFront + pFR*wFront
+                             + pWL*wSurround + pWR*wSurround
+                             + pSL*wSurround + pSR*wSurround
+                             + pRL*wSurround + pRR*wSurround;
+
+        double effectiveWeight = (unweightedSum > 1e-18)
+            ? (weightedSum / unweightedSum) : 1.0;
+
+        // Apply the effective weight to the total power measurement
+        double totalPower = unweightedSum * effectiveWeight;
 
         float inputPower = panL * panL + panR * panR;
         newTable[static_cast<size_t> (iIdx)] = (totalPower > 1e-18)
             ? static_cast<float> (std::sqrt (inputPower / totalPower)) : 1.0f;
     }
-    // -----------------------------------------------------------------
-    // Second pass: true peak measurement via full STFT pipeline.
-    // Generate two independent 0 dB true peak white noise signals,
-    // run them through a temporary STFT with the current cascade +
-    // gainTable, measure output peak.
-    //
-    // White noise (flat spectrum) ensures all FFT bins have roughly
-    // equal energy so the per-bin confidence gate passes uniformly.
-    // -----------------------------------------------------------------
-
-    // 1. Generate white noise with 0 dB true peak (independent L/R)
-    const int calDuration = 65536;
-    std::vector<float> noiseL (calDuration), noiseR (calDuration);
-
-    {
-        auto genWhite = [&](std::vector<float>& buf, int seed)
-        {
-            juce::dsp::FFT whiteFFT (16);
-            std::vector<float> spec (static_cast<size_t> (calDuration) * 2, 0.0f);
-            std::mt19937 rng (seed);
-            std::uniform_real_distribution<float> pd (0.0f, 2.0f * juce::MathConstants<float>::pi);
-
-            for (int k = 0; k <= calDuration / 2; ++k)
-            {
-                float mag = 1.0f;
-                float phase = pd (rng);
-
-                float re = mag * std::cos (phase);
-                float im = mag * std::sin (phase);
-
-                if (k == 0)
-                    spec[0] = re;
-                else if (k == calDuration / 2)
-                    spec[1] = re;
-                else
-                {
-                    size_t idx = static_cast<size_t> (k) * 2;
-                    spec[idx]     = re;
-                    spec[idx + 1] = im;
-                }
-            }
-
-            whiteFFT.performRealOnlyInverseTransform (spec.data());
-
-            float peak = 0.0f;
-            for (int i = 0; i < calDuration; ++i)
-                peak = std::max (peak, std::abs (spec[i]));
-            float norm = 1.0f / peak;
-            for (int i = 0; i < calDuration; ++i)
-                buf[i] = spec[i] * norm;
-        };
-
-        genWhite (noiseL, 42);
-        genWhite (noiseR, 99);
-    }
-
-    // 2. Temporarily install the new table so onFrame uses it
+    // Install the first-pass table (no second pass)
     gainTable = newTable;
-
-    // 3. Temporary STFT configured identically to the audio-thread one
-    StereoSTFT calSTFT;
-    calSTFT.setWindowSize (stft.fftOrder);
-    calSTFT.setNumOutputs (numSpecOut);
-    calSTFT.prepare (getSampleRate());
-    calSTFT.setFrameListener (this);
-
-    // 4. Process the noise through the temporary STFT
-    std::vector<std::vector<float>> calOutputs (numSpecOut, std::vector<float> (calDuration, 0.0f));
-
-    int calHop = stft.hopSize;
-    for (int pos = 0; pos + calHop <= calDuration; pos += calHop)
-    {
-        std::vector<float*> outPtrs (numSpecOut);
-        for (int ch = 0; ch < numSpecOut; ++ch)
-            outPtrs[ch] = calOutputs[ch].data() + pos;
-
-        calSTFT.process (noiseL.data() + pos, noiseR.data() + pos,
-                         outPtrs.data(), calHop);
-    }
-
-    // 5. Measure output true peak (skip first fftSize samples = transient)
-    float outputPeak = 0.0f;
-    for (int ch = 0; ch < numSpecOut; ++ch)
-    {
-        for (int i = stft.fftSize; i < calDuration; ++i)
-            outputPeak = std::max (outputPeak, std::abs (calOutputs[ch][i]));
-    }
-
-    // 6. Scale the entire table so the true peak sits at -0.1 dB
-    const float targetPeak = juce::Decibels::decibelsToGain (-0.1f);
-    float globalGain = (outputPeak > 1e-12f) ? (targetPeak / outputPeak) : targetPeak;
-    for (auto& g : gainTable)
-        g *= globalGain;
 }
 
 int SpatialExpanderAudioProcessor::getLatencySamplesForMode (int modeIndex) noexcept

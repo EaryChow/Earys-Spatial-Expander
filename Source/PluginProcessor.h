@@ -74,6 +74,12 @@ private:
                        float* fftRearL, float* fftRearR,
                        int fftSize, float stretch, int numSpecOut);
 
+    void applyCrosstalk (float* fftCenter, float* fftFrontL, float* fftFrontR,
+                         float* fftWideL, float* fftWideR,
+                         float* fftSideL, float* fftSideR,
+                         float* fftRearL, float* fftRearR,
+                         int fftSize, int numSpecOut, float crosstalkVal);
+
     void parameterChanged (const juce::String& parameterID, float newValue) override;
     void handleAsyncUpdate() override;
     void runCalibration();
@@ -82,6 +88,7 @@ private:
 
     std::atomic<int> pendingWindowOrder { 0 };
     std::atomic<bool> pendingFormatChange { false };
+    std::atomic<bool> pendingRecalibration { false };
     std::atomic<CalState> calState { CalState::Normal };
     std::atomic<int> fadeSamplesLeft { 0 };
     int fadeSamplesTotal = 0;
