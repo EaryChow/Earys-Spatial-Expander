@@ -985,13 +985,13 @@ void SpatialExpanderAudioProcessor::doCascade (const float* fftL, const float* f
         return;
     }
 
-    // Layer 3 left: Extract SideL, newFrontL, newRearL from (FrontL, RearL)
+    // Layer 3 left: Extract SideL, newFrontL, newSurroundL from (FrontL, RearL)
     std::copy (fftFrontL, fftFrontL + fftSize, cascadeLresSave.data());
     std::copy (fftRearL, fftRearL + fftSize, cascadeRresSave.data());
     analyser.onFrame (cascadeLresSave.data(), cascadeRresSave.data(),
                       fftSideL, fftFrontL, fftRearL, fftSize);
 
-    // Layer 3 right: Extract SideR, newFrontR, newRearR from (FrontR, RearR)
+    // Layer 3 right: Extract SideR, newFrontR, newSurroundR from (FrontR, RearR)
     std::copy (fftFrontR, fftFrontR + fftSize, cascadeLresSave.data());
     std::copy (fftRearR, fftRearR + fftSize, cascadeRresSave.data());
     analyser.onFrame (cascadeLresSave.data(), cascadeRresSave.data(),
@@ -1004,13 +1004,13 @@ void SpatialExpanderAudioProcessor::doCascade (const float* fftL, const float* f
         return;
     }
 
-    // Layer 4 left: Extract WideL, newFrontL, newSideL from (FrontL, SideL)
+    // Layer 4 left: Extract WideL, newFrontL, newSurroundL from (FrontL, SideL)
     std::copy (fftFrontL, fftFrontL + fftSize, cascadeLresSave.data());
     std::copy (fftSideL, fftSideL + fftSize, cascadeRresSave.data());
     analyser.onFrame (cascadeLresSave.data(), cascadeRresSave.data(),
                       fftWideL, fftFrontL, fftSideL, fftSize);
 
-    // Layer 4 right: Extract WideR, newFrontR, newSideR from (FrontR, SideR)
+    // Layer 4 right: Extract WideR, newFrontR, newSurroundR from (FrontR, SideR)
     std::copy (fftFrontR, fftFrontR + fftSize, cascadeLresSave.data());
     std::copy (fftSideR, fftSideR + fftSize, cascadeRresSave.data());
     analyser.onFrame (cascadeLresSave.data(), cascadeRresSave.data(),
@@ -1495,7 +1495,14 @@ void SpatialExpanderAudioProcessor::runCalibration()
                       fftRearL.data(), fftRearR.data(),
                       fftSize, stretch, numSpecOut);
 
-        // Measure total output power
+        // ITU-R BS.1770-4 / BS.2051 perceptual weighting.
+        // Front/Center (|θ| < 60°) is the reference weight.
+        // Every other channel in this cascade — Wide, Side, and Rear —
+        // sits at or beyond 60° azimuth and needs +1.5 dB (×1.41 power)
+        // so the gain table attenuates them to match front loudness.
+        static constexpr double wFront    = 1.0;
+        static constexpr double wSurround = 1.41;   // +1.5 dB
+
         auto measurePower = [&](float* buf) -> double
         {
             double power = 0.0;
@@ -1511,30 +1518,30 @@ void SpatialExpanderAudioProcessor::runCalibration()
             return power;
         };
 
-        double totalPower = measurePower (fftCenter.data())
-                          + measurePower (fftFrontL.data())
-                          + measurePower (fftFrontR.data());
+        double totalPower = measurePower (fftCenter.data())  * wFront
+                          + measurePower (fftFrontL.data()) * wFront
+                          + measurePower (fftFrontR.data()) * wFront;
 
         if (numSpecOut > 7)
         {
-            totalPower += measurePower (fftWideL.data())
-                        + measurePower (fftWideR.data())
-                        + measurePower (fftSideL.data())
-                        + measurePower (fftSideR.data())
-                        + measurePower (fftRearL.data())
-                        + measurePower (fftRearR.data());
+            totalPower += measurePower (fftWideL.data())  * wSurround
+                        + measurePower (fftWideR.data())  * wSurround
+                        + measurePower (fftSideL.data())  * wSurround
+                        + measurePower (fftSideR.data())  * wSurround
+                        + measurePower (fftRearL.data())  * wSurround
+                        + measurePower (fftRearR.data())  * wSurround;
         }
         else if (numSpecOut > 5)
         {
-            totalPower += measurePower (fftSideL.data())
-                        + measurePower (fftSideR.data())
-                        + measurePower (fftRearL.data())
-                        + measurePower (fftRearR.data());
+            totalPower += measurePower (fftSideL.data())  * wSurround
+                        + measurePower (fftSideR.data())  * wSurround
+                        + measurePower (fftRearL.data())  * wSurround
+                        + measurePower (fftRearR.data())  * wSurround;
         }
         else if (numSpecOut > 3)
         {
-            totalPower += measurePower (fftRearL.data())
-                        + measurePower (fftRearR.data());
+            totalPower += measurePower (fftRearL.data())  * wSurround
+                        + measurePower (fftRearR.data())  * wSurround;
         }
 
         float inputPower = panL * panL + panR * panR;
