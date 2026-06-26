@@ -24,14 +24,14 @@ What the technique is basically doing (7.1 example):
 
 From the repo owner's limited experience, the result is really good and intuitive. 
 
-Elements that the mixing engineer put to the widest positions are now in the rear, making those elements sounding as wide as possible. Those elements panned in between are put to the sides, and center vocals only stay at the center channel. For movie viweing, a character speaking from the left side off-screen, and then walk gradualy from off-screen to on-screen, the plugin puts them first in the left rear channel, and then they gradually move to the left side surround speaker, and then front speakers; for outdoor scenes, ambient sounds also naturally get put in the rear; if a car runs from off-screen left to on-screen and then off-screen right, we hear the car sound sweeping from rear left to side left to front to side right and finally rear right. 
+Elements that the mixing engineer put to the widest positions are now in the rear, making those elements sounding as wide as possible. Those elements panned in between are put to the sides, and center vocals only stay at the center channel. For movie viewing, a character speaking from the left side off-screen, and then walk gradually from off-screen to on-screen, the plugin puts them first in the left rear channel, and then they gradually move to the left side surround speaker, and then front speakers; for outdoor scenes, ambient sounds also naturally get put in the rear; if a car runs from off-screen left to on-screen and then off-screen right, we hear the car sound sweeping from rear left to side left to front to side right and finally rear right. 
 
 ---
 
 ## How to use
 
 ### 1. Insert the plugin
-Load Spatial Expander on a surround track or bus that contains the original stereo signals (for most VST hosts, they expect the input and output format to be the same. Cantabile Lite being node-based and accpeting arbitrary input and output is an exception). The plugin accepts input with ≥ 2 channels, but **only the first two channels (L/R) are processed.** If your input has more than 2 channels, a warning will appear. Recognized input formats are **stereo, 3.0, 5.1, 7.1, 5.1.x, 7.1.x and 9.1.x**.
+Load Spatial Expander on a surround track or bus that contains the original stereo signals (for most VST hosts, they expect the input and output format to be the same. Cantabile Lite being node-based and accepting arbitrary input and output is an exception). The plugin accepts input with ≥ 2 channels, but **only the first two channels (L/R) are processed.** If your input has more than 2 channels, a warning will appear. Recognized input formats are **stereo, 3.0, 5.1, 7.1, 5.1.x, 7.1.x and 9.1.x**.
 
 ### 2. Set the Output Format
 Open the plugin UI and choose your target layout:
@@ -89,7 +89,7 @@ Controls how aggressively the stereo field is stretched across the surround ring
 
 - **1.0 (Full Stretch):** Hard-panned sources go to the rear speakers. Moderate sources go to side/wide. This is the default and the intended "surround" experience.
 - **0.0 (Collapsed):** All extracted surround content is folded back into the front LCR speakers. The surround speakers go silent.
-- **In between:** Linear crossfade. For example, at 0.5 in 7.1 mode, the side speakers are reduced by half and their energy is split between Center and Front L/R; rear speakers are split 50/50 with Front L/R.
+- **In between:** Linear cross-fade. For example, at 0.5 in 7.1 mode, the side speakers are reduced by half and their energy is split between Center and Front L/R; rear speakers are split 50/50 with Front L/R.
 
 **Note:** In **3.0 mode**, Stretch has no audible effect (there are no surround speakers to remap) and the control is disabled.
 
@@ -185,7 +185,7 @@ This is applied in the frequency domain before calibration.
 ### 6. Automatic Calibration
 Because the cascade naturally changes total loudness as a source pans (a center-panned source splits into multiple correlated channels), the plugin runs an internal **automatic calibration** at startup and whenever you change format, latency, stretch, rear bias, or crosstalk.
 
-**Calibbration with perceptual weighting:**
+**Calibration with perceptual weighting:**
 The plugin generates correlated white noise with a flat spectrum, sweeps the pan from hard-left to hard-right in 1 dB ILD steps, and runs the full cascade (including stretch, rear bias, and crosstalk) at each step. It measures the total output power using **ITU-R BS.1770-4 / BS.2051 perceptual channel weightings** (+1.5 dB for side/rear channels) so that phantom images between speakers sound equally loud, not just physically equal-energy. A gain table `G[ILD]` is built that normalizes every pan position to the same perceived loudness.
 
 During playback, the plugin computes the ILD independently for every FFT bin, looks up the corresponding gain from the calibration table, and applies that gain only to that bin. A soft confidence gate based on the bin's energy relative to the frame peak gracefully fades the correction to unity for quiet bins, preventing grain on reverb tails. There is no temporal smoothing across frames—the STFT's 32× overlap-add provides natural temporal continuity. The result is a spectral shaper rather than a dynamics processor: no pumping, no broadband ducking.
