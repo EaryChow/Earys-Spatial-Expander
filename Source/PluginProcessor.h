@@ -46,6 +46,9 @@ public:
     juce::String getFormatWarningText (int selectedFormat) const;
     juce::String getCurrentBusFormatName() const;
 
+    void beginRecalibrationGesture();
+    void endRecalibrationGesture();
+
     int getNumSpectralOutputs() const noexcept;
 
     std::atomic<bool> pendingLatencyMeasurement { false };
@@ -89,7 +92,11 @@ private:
     std::atomic<int> pendingWindowOrder { 0 };
     std::atomic<bool> pendingFormatChange { false };
     std::atomic<bool> pendingRecalibration { false };
+    std::atomic<int> recalibrationGestureCount { 0 };
+    std::atomic<bool> pendingRecalibrationAfterGesture { false };
     std::atomic<CalState> calState { CalState::Normal };
+
+    void triggerPendingRecalibration();
     std::atomic<int> fadeSamplesLeft { 0 };
     int fadeSamplesTotal = 0;
 

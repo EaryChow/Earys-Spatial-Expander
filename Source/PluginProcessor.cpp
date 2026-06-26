@@ -779,6 +779,12 @@ void SpatialExpanderAudioProcessor::parameterChanged (const juce::String& parame
         if (calState.load() != CalState::Normal)
             return;
 
+        if (recalibrationGestureCount.load() > 0)
+        {
+            pendingRecalibrationAfterGesture.store (true);
+            return;
+        }
+
         pendingRecalibration.store (true);
         fadeSamplesLeft.store (fadeSamplesTotal);
         calState.store (CalState::FadingOut);
@@ -1666,6 +1672,30 @@ void SpatialExpanderAudioProcessor::runCalibration()
     }
     // Install the first-pass table (no second pass)
     gainTable = newTable;
+}
+
+void SpatialExpanderAudioProcessor::beginRecalibrationGesture()
+{
+    ++recalibrationGestureCount;
+}
+
+void SpatialExpanderAudioProcessor::endRecalibrationGesture()
+{
+    if (--recalibrationGestureCount == 0)
+        triggerPendingRecalibration();
+}
+
+void SpatialExpanderAudioProcessor::triggerPendingRecalibration()
+{
+    if (pendingRecalibrationAfterGesture.exchange (false))
+    {
+        if (calState.load() == CalState::Normal)
+        {
+            pendingRecalibration.store (true);
+            fadeSamplesLeft.store (fadeSamplesTotal);
+            calState.store (CalState::FadingOut);
+        }
+    }
 }
 
 int SpatialExpanderAudioProcessor::getLatencySamplesForMode (int modeIndex) noexcept

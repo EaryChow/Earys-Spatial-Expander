@@ -75,6 +75,8 @@ SpatialExpanderAudioProcessorEditor::SpatialExpanderAudioProcessorEditor (
     addAndMakeVisible (crosstalkSlider);
     crosstalkAttach = std::make_unique<juce::AudioProcessorValueTreeState::SliderAttachment>(
         processor.getAPVTS(), "crosstalk", crosstalkSlider);
+    crosstalkSlider.onDragStart = [this] { processor.beginRecalibrationGesture(); };
+    crosstalkSlider.onDragEnd   = [this] { processor.endRecalibrationGesture(); };
 
     stretchLabel.setText ("Stretch", juce::dontSendNotification);
     stretchLabel.setJustificationType (juce::Justification::centred);
@@ -86,6 +88,8 @@ SpatialExpanderAudioProcessorEditor::SpatialExpanderAudioProcessorEditor (
     addAndMakeVisible (stretchSlider);
     stretchAttach = std::make_unique<juce::AudioProcessorValueTreeState::SliderAttachment>(
         processor.getAPVTS(), "stretch", stretchSlider);
+    stretchSlider.onDragStart = [this] { processor.beginRecalibrationGesture(); };
+    stretchSlider.onDragEnd   = [this] { processor.endRecalibrationGesture(); };
 
     preampLabel.setText ("Preamp", juce::dontSendNotification);
     preampLabel.setJustificationType (juce::Justification::centred);
@@ -116,6 +120,8 @@ SpatialExpanderAudioProcessorEditor::SpatialExpanderAudioProcessorEditor (
     addAndMakeVisible (rearBiasSlider);
     rearBiasAttach = std::make_unique<juce::AudioProcessorValueTreeState::SliderAttachment>(
         processor.getAPVTS(), "rearBias", rearBiasSlider);
+    rearBiasSlider.onDragStart = [this] { processor.beginRecalibrationGesture(); };
+    rearBiasSlider.onDragEnd   = [this] { processor.endRecalibrationGesture(); };
 
     latencyLabel.setText ("Quality/Latency", juce::dontSendNotification);
     latencyLabel.setJustificationType (juce::Justification::centred);
