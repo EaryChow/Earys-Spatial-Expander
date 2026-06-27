@@ -1124,8 +1124,20 @@ void SpatialExpanderAudioProcessor::applyCrosstalk (float* fftCenter, float* fft
     // Channel weights: front/center = 1.0, everything else = 1.41
     auto getWeight = [&](int ch) -> float
     {
-        if (ch == 0 || ch == 1 || ch == 2) return 1.0f;
-        return 1.41f;
+        if (ch == 0 || ch == 1 || ch == 2) return 1.0f;   // Center, Front
+
+        if (numSpecOut <= 5)   // 5.1: ch 3,4 = Surround (~110°)
+            return 1.41f;
+
+        if (numSpecOut <= 7)   // 7.1: ch 3,4 = Side (~90°), ch 5,6 = Rear (~135°)
+        {
+            if (ch == 3 || ch == 4) return 1.41f;
+            return 1.0f;            // Rear
+        }
+
+        // 9.1: ch 3,4 = Wide (~60°), ch 5,6 = Side (~90°), ch 7,8 = Rear (~135°)
+        if (ch == 7 || ch == 8) return 1.0f;     // Rear
+        return 1.41f;                               // Wide & Side
     };
 
     for (int i = 0; i < fftSize; ++i)
@@ -1678,12 +1690,13 @@ void SpatialExpanderAudioProcessor::runCalibration()
                             fftSize, numSpecOut, crosstalkVal);
         }
 
-        // ITU-R BS.1770-4 / BS.2051 perceptual weighting.
-        // Compute the effective perceptual weight for this ILD based on
-        // the energy distribution across channels.  This is per-ILD
-        // weighting, not per-channel speaker calibration.
-        static constexpr double wFront    = 1.0;
-        static constexpr double wSurround = 1.41;   // +1.5 dB
+        // ITU-R BS.1770-4 / BS.2051 position-dependent weighting
+        // |θ| < 60°            → 1.00  (Front, Center)
+        // 60° ≤ |θ| ≤ 120°     → 1.41  (Wide, Side, 5.1 Surround)
+        // 120° < |θ| ≤ 180°    → 1.00  (Rear)
+        static constexpr double wFront = 1.0;
+        static constexpr double wSide  = 1.41;
+        static constexpr double wRear  = 1.0;
 
         auto measurePower = [&](float* buf) -> double
         {
@@ -1700,7 +1713,6 @@ void SpatialExpanderAudioProcessor::runCalibration()
             return power;
         };
 
-        // Measure raw channel powers
         double pC  = measurePower (fftCenter.data());
         double pFL = measurePower (fftFrontL.data());
         double pFR = measurePower (fftFrontR.data());
@@ -1722,20 +1734,17 @@ void SpatialExpanderAudioProcessor::runCalibration()
             pRL = measurePower (fftRearL.data());  pRR = measurePower (fftRearR.data());
         }
 
-        // Effective perceptual weight for this ILD:
-        // weighted sum / unweighted sum — gives a single scalar representing
-        // how much louder this ILD sounds than front.
-        double unweightedSum = pC + pFL + pFR + pWL + pWR + pSL + pSR + pRL + pRR;
-        double weightedSum   = pC*wFront + pFL*wFront + pFR*wFront
-                             + pWL*wSurround + pWR*wSurround
-                             + pSL*wSurround + pSR*wSurround
-                             + pRL*wSurround + pRR*wSurround;
+        double totalPower = pC*wFront + pFL*wFront + pFR*wFront;
 
-        double effectiveWeight = (unweightedSum > 1e-18)
-            ? (weightedSum / unweightedSum) : 1.0;
-
-        // Apply the effective weight to the total power measurement
-        double totalPower = unweightedSum * effectiveWeight;
+        if (numSpecOut > 7)
+            totalPower += pWL*wSide + pWR*wSide
+                        + pSL*wSide + pSR*wSide
+                        + pRL*wRear + pRR*wRear;
+        else if (numSpecOut > 5)
+            totalPower += pSL*wSide + pSR*wSide
+                        + pRL*wRear + pRR*wRear;
+        else if (numSpecOut > 3)
+            totalPower += pRL*wSide + pRR*wSide;
 
         float inputPower = panL * panL + panR * panR;
         newTable[static_cast<size_t> (iIdx)] = (totalPower > 1e-18)
