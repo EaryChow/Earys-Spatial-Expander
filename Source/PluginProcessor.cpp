@@ -774,7 +774,7 @@ void SpatialExpanderAudioProcessor::parameterChanged (const juce::String& parame
         fadeSamplesLeft.store (fadeSamplesTotal);
         calState.store (CalState::FadingOut);
     }
-    else if (parameterID == "rearBias" || parameterID == "crosstalk" || parameterID == "stretch")
+    else if (parameterID == "crosstalk" || parameterID == "stretch")
     {
         if (calState.load() != CalState::Normal)
             return;
@@ -915,12 +915,83 @@ void SpatialExpanderAudioProcessor::doCascade (const float* fftL, const float* f
     // Layer 2 right: Extract FrontR, RearR, Center from Rres, tempC
     analyser.onFrame (cascadeRresSave.data(), fftTemp, fftFrontR, fftRearR, fftCenter, fftSize);
 
-    // --- Rear Bias: blend between extracted rear (0) and raw residual (1) ---
+    // --- Rear Bias: magnitude-preserving blend ---
+    // Increases correlation/ambience by mixing raw residual into extracted rear,
+    // but locks the rear channel's loudness to the extracted rear magnitude.
     float rearBias = apvts.getRawParameterValue ("rearBias")->load();
-    for (int i = 0; i < fftSize; ++i)
+
+    // DC bin
     {
-        fftRearL[i] = fftRearL[i] * (1.0f - rearBias) + cascadeLresSave[i] * rearBias;
-        fftRearR[i] = fftRearR[i] * (1.0f - rearBias) + cascadeRresSave[i] * rearBias;
+        float extL = fftRearL[0];
+        float rawL = cascadeLresSave[0];
+        float extR = fftRearR[0];
+        float rawR = cascadeRresSave[0];
+
+        float blendedL = extL * (1.0f - rearBias) + rawL * rearBias;
+        float blendedR = extR * (1.0f - rearBias) + rawR * rearBias;
+
+        float magExtL = std::abs (extL);
+        float magBlendedL = std::abs (blendedL);
+        float scaleL = (magBlendedL > 1e-18f) ? (magExtL / magBlendedL) : 1.0f;
+
+        float magExtR = std::abs (extR);
+        float magBlendedR = std::abs (blendedR);
+        float scaleR = (magBlendedR > 1e-18f) ? (magExtR / magBlendedR) : 1.0f;
+
+        fftRearL[0] = blendedL * scaleL;
+        fftRearR[0] = blendedR * scaleR;
+    }
+
+    // Nyquist bin
+    if (fftSize > 2)
+    {
+        float extL = fftRearL[1];
+        float rawL = cascadeLresSave[1];
+        float extR = fftRearR[1];
+        float rawR = cascadeRresSave[1];
+
+        float blendedL = extL * (1.0f - rearBias) + rawL * rearBias;
+        float blendedR = extR * (1.0f - rearBias) + rawR * rearBias;
+
+        float magExtL = std::abs (extL);
+        float magBlendedL = std::abs (blendedL);
+        float scaleL = (magBlendedL > 1e-18f) ? (magExtL / magBlendedL) : 1.0f;
+
+        float magExtR = std::abs (extR);
+        float magBlendedR = std::abs (blendedR);
+        float scaleR = (magBlendedR > 1e-18f) ? (magExtR / magBlendedR) : 1.0f;
+
+        fftRearL[1] = blendedL * scaleL;
+        fftRearR[1] = blendedR * scaleR;
+    }
+
+    // Complex bins
+    for (int k = 1; k < fftSize / 2; ++k)
+    {
+        size_t idx = static_cast<size_t> (k) * 2;
+
+        float extL_re = fftRearL[idx],     extL_im = fftRearL[idx + 1];
+        float rawL_re = cascadeLresSave[idx], rawL_im = cascadeLresSave[idx + 1];
+        float extR_re = fftRearR[idx],     extR_im = fftRearR[idx + 1];
+        float rawR_re = cascadeRresSave[idx], rawR_im = cascadeRresSave[idx + 1];
+
+        float blendedL_re = extL_re * (1.0f - rearBias) + rawL_re * rearBias;
+        float blendedL_im = extL_im * (1.0f - rearBias) + rawL_im * rearBias;
+        float blendedR_re = extR_re * (1.0f - rearBias) + rawR_re * rearBias;
+        float blendedR_im = extR_im * (1.0f - rearBias) + rawR_im * rearBias;
+
+        float magExtL = std::sqrt (extL_re * extL_re + extL_im * extL_im);
+        float magBlendedL = std::sqrt (blendedL_re * blendedL_re + blendedL_im * blendedL_im);
+        float scaleL = (magBlendedL > 1e-18f) ? (magExtL / magBlendedL) : 1.0f;
+
+        float magExtR = std::sqrt (extR_re * extR_re + extR_im * extR_im);
+        float magBlendedR = std::sqrt (blendedR_re * blendedR_re + blendedR_im * blendedR_im);
+        float scaleR = (magBlendedR > 1e-18f) ? (magExtR / magBlendedR) : 1.0f;
+
+        fftRearL[idx]     = blendedL_re * scaleL;
+        fftRearL[idx + 1] = blendedL_im * scaleL;
+        fftRearR[idx]     = blendedR_re * scaleR;
+        fftRearR[idx + 1] = blendedR_im * scaleR;
     }
 
     if (numSpecOut <= 5)

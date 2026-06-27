@@ -120,9 +120,6 @@ SpatialExpanderAudioProcessorEditor::SpatialExpanderAudioProcessorEditor (
     addAndMakeVisible (rearBiasSlider);
     rearBiasAttach = std::make_unique<juce::AudioProcessorValueTreeState::SliderAttachment>(
         processor.getAPVTS(), "rearBias", rearBiasSlider);
-    rearBiasSlider.onDragStart = [this] { processor.beginRecalibrationGesture(); };
-    rearBiasSlider.onDragEnd   = [this] { processor.endRecalibrationGesture(); };
-
     latencyLabel.setText ("Quality/Latency", juce::dontSendNotification);
     latencyLabel.setJustificationType (juce::Justification::centred);
     addAndMakeVisible (latencyLabel);
