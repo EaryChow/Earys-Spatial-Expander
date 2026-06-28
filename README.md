@@ -58,7 +58,7 @@ The **Quality/Latency** selector offers four STFT window sizes:
 
 Higher latency = larger FFT = better frequency resolution and cleaner extraction. Most offline DAWs automatically compensates for the reported latency, but realtime hosts like Cantabile Lite do not, so be ware.
 
-**Note:** Switching latency, output format, crosstalk, or stretch during playback causes a brief recalibration pause (~50–100 ms) after you release the control. Rear Bias can be adjusted smoothly without any pause.
+**Note:** Switching latency, output format, crosstalk, stretch, or rear bias during playback causes a brief recalibration pause (~50–100 ms) after you release the control.
 
 ### 4. Adjust to taste
 Use the parameters described below to shape the upmix. 
@@ -112,7 +112,7 @@ Gain of the LFE channel. Range: **−12.0 dB to +12.0 dB**. Default: **0.0 dB**.
 Input gain. Range: **−6.0 dB to +6.0 dB**. Applied before the STFT. Useful for gain-staging quiet or hot sources into the extractor.
 
 ### Rear Bias
-Controls how the rear channels are derived. At **0.0**, the rear channels are fully isolated from the center signal, giving maximum clarity. At **1.0**, the raw unextracted residual is used, giving the rear channels a stronger, more ambient presence. The default **0.5** blends both for a smooth transition. Lower values give cleaner rear imaging; higher values give more envelopment. This is for creative control. The blend is magnitude-preserving, so loudness stays consistent across the entire range and no recalibration is needed.
+Controls how the rear channels are derived. At **0.0**, the rear channels are fully isolated from the center signal, giving maximum clarity. At **1.0**, the raw unextracted residual is used, giving the rear channels a stronger, more ambient presence. The default **0.5** blends both for a smooth transition. Lower values give cleaner rear imaging; higher values give more envelopment. This is for creative control. The blend is a linear complex mix; loudness is kept consistent automatically by the calibration system, which includes rear bias when building the ILD gain table. Changing this triggers a recalibration.
 
 ### Crosstalk
 Leaks each speaker's signal to its adjacent neighbors for smoother panning transitions. Range: **0.0 – 0.5**. Default: **0.2**. At 0, channels are completely discrete. Higher values create a more blended, continuous surround field. Applied in the frequency domain before calibration so the gain table automatically compensates for any loudness change. Changing this triggers a recalibration.
@@ -183,7 +183,7 @@ The **Stretch** parameter remaps extracted channels to output speakers. At full 
 This is applied in the frequency domain before calibration.
 
 ### 6. Automatic Calibration
-Because the cascade naturally changes total loudness as a source pans (a center-panned source splits into multiple correlated channels), the plugin runs an internal **automatic calibration** at startup and whenever you change format, latency, stretch, or crosstalk.
+Because the cascade naturally changes total loudness as a source pans (a center-panned source splits into multiple correlated channels), the plugin runs an internal **automatic calibration** at startup and whenever you change format, latency, stretch, crosstalk, or rear bias.
 
 **Calibration with perceptual weighting:**
 The plugin generates correlated white noise with a flat spectrum, sweeps the pan from hard-left to hard-right in 0.1 dB ILD steps, and runs the full cascade (including stretch, rear bias, and crosstalk) at each step. It measures the total output power using **ITU-R BS.1770-4 / BS.2051 perceptual channel weightings** (+1.5 dB for side/wide/surround channels; front, center, and rear channels are weighted at 0 dB) so that phantom images between speakers sound equally loud, not just physically equal-energy. A gain table `G[ILD]` is built that normalizes every pan position to the same perceived loudness.
