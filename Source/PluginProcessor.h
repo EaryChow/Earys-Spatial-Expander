@@ -100,7 +100,7 @@ private:
     std::atomic<int> fadeSamplesLeft { 0 };
     int fadeSamplesTotal = 0;
 
-    static constexpr int ildTableSize = 121;
+    static constexpr int ildTableSize = 1201;   // 0.1 dB steps from -60 to +60 dB
     std::vector<float> gainTable;
 
     StereoSTFT stft;

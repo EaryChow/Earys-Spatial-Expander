@@ -1447,9 +1447,18 @@ void SpatialExpanderAudioProcessor::onFrame (const float* fftL, const float* fft
                     ildDb = 10.0f * std::log10 (l2 / r2);
 
                 ildDb = std::max (-60.0f, std::min (60.0f, ildDb));
-                int idx = static_cast<int> (std::round (ildDb)) + 60;
-                idx = std::max (0, std::min (ildTableSize - 1, idx));
-                rawGain = gainTable[static_cast<size_t> (idx)];
+
+                // Linear interpolation with 0.1 dB step resolution
+                float idxF = (ildDb + 60.0f) * 10.0f;   // 1 / 0.1 = 10
+                int idxLow  = static_cast<int> (std::floor (idxF));
+                int idxHigh = idxLow + 1;
+                float frac  = idxF - static_cast<float> (idxLow);
+
+                idxLow  = std::max (0, std::min (ildTableSize - 1, idxLow));
+                idxHigh = std::max (0, std::min (ildTableSize - 1, idxHigh));
+
+                rawGain = gainTable[static_cast<size_t> (idxLow)] * (1.0f - frac)
+                        + gainTable[static_cast<size_t> (idxHigh)] * frac;
             }
 
             binCalGains[static_cast<size_t> (k)] = 1.0f + (rawGain - 1.0f) * confidence;
@@ -1653,7 +1662,7 @@ void SpatialExpanderAudioProcessor::runCalibration()
 
     for (int iIdx = 0; iIdx < ildTableSize; ++iIdx)
     {
-        float ildDb = static_cast<float> (iIdx - 60);
+        float ildDb = static_cast<float> (iIdx - 600) * 0.1f;
 
         float ratio = std::pow (10.0f, ildDb / 20.0f);
         float panL  = ratio / std::sqrt (1.0f + ratio * ratio);
