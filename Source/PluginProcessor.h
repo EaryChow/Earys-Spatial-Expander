@@ -57,6 +57,7 @@ public:
     std::atomic<int> measuredLatencySamples { -1 };
 
     double getLoudness() const { return loudnessMeter.getMomentaryLoudness(); }
+    bool isBypassed() const noexcept;
 
     enum OutputFormat { Auto = 0, Fmt30, Fmt51, Fmt71, Fmt916 };
     enum AuxBusIdx { AuxFront = 1, AuxCenter, AuxLFE, AuxWide, AuxSide, AuxRear };

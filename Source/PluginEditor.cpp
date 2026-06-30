@@ -359,7 +359,7 @@ void SpatialExpanderAudioProcessorEditor::timerCallback()
     {
         double loudness = processor.getLoudness();
         if (loudness < -60.0)
-    loudnessLabel.setText ("Momentary: --", juce::dontSendNotification);
+            loudnessLabel.setText ("Momentary: --", juce::dontSendNotification);
         else
             loudnessLabel.setText ("Momentary: " + juce::String (loudness, 1) + " LUFS",
                                    juce::dontSendNotification);
@@ -401,6 +401,40 @@ void SpatialExpanderAudioProcessorEditor::timerCallback()
     {
         lastDetectedFormat = numSpecOut;
         updateChGainPanel();
+    }
+
+    // Override: disable all upmix controls when bypassed
+    {
+        bool bypass = processor.isBypassed();
+
+        lfeCutoffSlider.setEnabled (!bypass);
+        lfeCutoffLabel.setEnabled  (!bypass);
+        lfeLevelSlider.setEnabled  (!bypass);
+        lfeLevelLabel.setEnabled   (!bypass);
+
+        inFormatComboBox.setEnabled (!bypass);
+        inFormatLabel.setEnabled    (!bypass);
+
+        formatComboBox.setEnabled (!bypass);
+        formatLabel.setEnabled    (!bypass);
+
+        leakCenterSlider.setEnabled (!bypass);
+        leakCenterLabel.setEnabled  (!bypass);
+
+        crosstalkSlider.setEnabled  (!bypass);
+        crosstalkLabel.setEnabled   (!bypass);
+        rearBiasSlider.setEnabled   (!bypass);
+        rearBiasLabel.setEnabled    (!bypass);
+
+        stretchSlider.setEnabled    (!bypass);
+        stretchLabel.setEnabled     (!bypass);
+
+        chGainToggle.setEnabled (!bypass);
+        for (int i = 0; i < numChOff; ++i)
+        {
+            chOffSliders[i].setEnabled (!bypass);
+            chOffLabels[i].setEnabled  (!bypass);
+        }
     }
 }
 
@@ -455,5 +489,6 @@ void SpatialExpanderAudioProcessorEditor::updateLatencyComboBox()
         juce::String label = juce::String (qualityLabels[i]) + juce::String (latency) + " (" + juce::String (ms, 1) + " ms)";
         latencyComboBox.addItem (label, i + 1);
     }
+    latencyComboBox.addItem ("Bypass/Realtime", 5);
     latencyComboBox.setSelectedId (currentId, juce::dontSendNotification);
 }

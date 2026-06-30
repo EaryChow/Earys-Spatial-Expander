@@ -21,7 +21,7 @@ SpatialExpanderAudioProcessor::SpatialExpanderAudioProcessor()
           std::make_unique<juce::AudioParameterChoice> ("outputFormat", "Output Format",
               juce::StringArray { "Auto", "3.0", "5.1", "7.1", "9.1" }, 0),
           std::make_unique<juce::AudioParameterChoice> ("latency", "Latency",
-              juce::StringArray { "496", "992", "1984", "3968" }, 1),
+              juce::StringArray { "496", "992", "1984", "3968", "Bypass/Realtime" }, 1),
           std::make_unique<juce::AudioParameterFloat> ("leakCenter", "Leak Center",
               juce::NormalisableRange<float> (0.0f, 1.5f, 0.01f), 0.0f),
           std::make_unique<juce::AudioParameterFloat> ("crosstalk", "Crosstalk",
@@ -204,6 +204,19 @@ void SpatialExpanderAudioProcessor::prepareToPlay (double sampleRate, int sample
     fadeSamplesTotal = static_cast<int> (sampleRate * 0.01);
 
     int idx = static_cast<int> (apvts.getRawParameterValue ("latency")->load());
+
+    if (isBypassed())
+    {
+        setLatencySamples (0);
+        int numOut = getMainBusNumOutputChannels();
+        chOutputs.resize (std::max (numOut, 9));
+        for (auto& buf : chOutputs)
+            buf.resize (samplesPerBlock, 0.0f);
+        chLFE.resize (samplesPerBlock, 0.0f);
+        loudnessMeter.prepare (sampleRate, std::max (numOut, 10));
+        return;
+    }
+
     int order = 9 + idx;
 
     int numSpecOut = getNumSpectralOutputs();
@@ -440,6 +453,24 @@ void SpatialExpanderAudioProcessor::processBlock (juce::AudioBuffer<float>& buff
     {
         lfe.setCutoff (lfeCutoff);
         prevLfeCutoff = lfeCutoff;
+    }
+
+    if (isBypassed())
+    {
+        auto numOutCh = buffer.getNumChannels();
+        auto numInCh  = numOutCh;
+        {
+            auto* mainBus = getBus (true, 0);
+            if (mainBus != nullptr)
+                numInCh = mainBus->getCurrentLayout().size();
+        }
+        for (int ch = numInCh; ch < numOutCh; ++ch)
+            buffer.clear (ch, 0, numSamples);
+
+        auto* outBus = getBus (false, 0);
+        auto outLayout = (outBus != nullptr) ? outBus->getCurrentLayout() : juce::AudioChannelSet();
+        loudnessMeter.process (buffer, outLayout, 3);
+        return;
     }
 
     int numSpecOut = static_cast<int> (chOutputs.size());
@@ -914,10 +945,30 @@ void SpatialExpanderAudioProcessor::parameterChanged (const juce::String& parame
 {
     if (parameterID == "latency")
     {
+        int idx = static_cast<int> (apvts.getRawParameterValue ("latency")->load());
+
+        if (idx == 4)
+        {
+            // Switching to bypass mode: no fade, no reconfigure, just zero latency
+            if (calState.load() != CalState::Normal)
+            {
+                // Cancel any pending reconfiguration
+                calState.store (CalState::Normal);
+                fadeSamplesLeft.store (0);
+            }
+            pendingWindowOrder.store (0);
+            pendingFormatChange.store (false);
+            pendingRecalibration.store (false);
+            pendingRecalibrationAfterGesture.store (false);
+            setLatencySamples (0);
+            updateHostDisplay();
+            return;
+        }
+
         if (calState.load() != CalState::Normal)
             return;
 
-        pendingWindowOrder.store (9 + static_cast<int> (apvts.getRawParameterValue ("latency")->load()));
+        pendingWindowOrder.store (9 + idx);
         fadeSamplesLeft.store (fadeSamplesTotal);
         calState.store (CalState::FadingOut);
     }
@@ -2421,8 +2472,15 @@ void SpatialExpanderAudioProcessor::triggerPendingRecalibration()
     }
 }
 
+bool SpatialExpanderAudioProcessor::isBypassed() const noexcept
+{
+    int idx = static_cast<int> (apvts.getRawParameterValue ("latency")->load());
+    return idx == 4;
+}
+
 int SpatialExpanderAudioProcessor::getLatencySamplesForMode (int modeIndex) noexcept
 {
+    if (modeIndex == 4) return 0;
     int fftSize = 1 << (9 + modeIndex);
     return fftSize - fftSize / 32;
 }
