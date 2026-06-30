@@ -160,7 +160,7 @@ SpatialExpanderAudioProcessorEditor::SpatialExpanderAudioProcessorEditor (
     loudnessLabel.setFont (juce::Font (juce::FontOptions (14.0f, juce::Font::bold)));
     loudnessLabel.setColour (juce::Label::textColourId, juce::Colours::lime);
     loudnessLabel.setJustificationType (juce::Justification::centred);
-    loudnessLabel.setText ("Momentary: --", juce::dontSendNotification);
+    loudnessLabel.setText ("Momentary Loudness: --", juce::dontSendNotification);
     addAndMakeVisible (loudnessLabel);
 
     debugText.setMultiLine (true, true);
@@ -220,6 +220,11 @@ SpatialExpanderAudioProcessorEditor::SpatialExpanderAudioProcessorEditor (
         addAndMakeVisible (sld);
     }
 
+    debugToggle.setButtonText ("Show Debug Channel Info");
+    debugToggle.setToggleState (false, juce::dontSendNotification);
+    addAndMakeVisible (debugToggle);
+    debugToggle.onClick = [this] { updateChGainPanel(); };
+
     updateFormatComboBox();
     updateChGainPanel();
 
@@ -259,18 +264,17 @@ void SpatialExpanderAudioProcessorEditor::updateChGainPanel()
     }
 
     // Resize window to fit
+    int newH = 720;
     if (show)
     {
         int extraRows = 0;
         for (int i = 0; i < numChOff; ++i)
             if (visible[i]) ++extraRows;
-        int newH = 720 + 24 + static_cast<int> (chGainInfoLabel.getFont().getHeight()) + 6 + extraRows * 34 + 10;
-        setSize (550, newH);
+        newH = 720 + 24 + static_cast<int> (chGainInfoLabel.getFont().getHeight()) + 6 + extraRows * 34 + 10;
     }
-    else
-    {
-        setSize (550, 720);
-    }
+    if (debugToggle.getToggleState())
+        newH += 24 + 80 + 6;
+    setSize (550, newH);
 }
 
 void SpatialExpanderAudioProcessorEditor::paint (juce::Graphics& g)
@@ -311,6 +315,11 @@ void SpatialExpanderAudioProcessorEditor::resized()
     preampLabel.setBounds (sl.removeFromLeft (100));
     preampSlider.setBounds (sl.reduced (5));
 
+    {
+        auto loudArea = area.removeFromTop (24);
+        loudnessLabel.setBounds (loudArea.reduced (10, 0));
+    }
+
     auto inFmtArea = area.removeFromTop (45);
     inFormatLabel.setBounds (inFmtArea.removeFromTop (20));
     inFormatComboBox.setBounds (inFmtArea.reduced (60, 0));
@@ -348,11 +357,17 @@ void SpatialExpanderAudioProcessorEditor::resized()
         }
     }
 
-    auto loudArea = area.removeFromTop (24);
-    loudnessLabel.setBounds (loudArea.reduced (10, 0));
+    {
+        auto debugToggleArea = area.removeFromTop (24);
+        debugToggle.setBounds (debugToggleArea.reduced (10, 0));
+    }
 
-    auto debugArea = area.removeFromTop (80);
-    debugText.setBounds (debugArea.reduced (10, 2));
+    debugText.setVisible (debugToggle.getToggleState());
+    if (debugToggle.getToggleState())
+    {
+        auto debugArea = area.removeFromTop (80);
+        debugText.setBounds (debugArea.reduced (10, 2));
+    }
 
     auto warnArea = area.removeFromBottom (60);
     warningText.setBounds (warnArea.reduced (10, 2));
@@ -380,9 +395,9 @@ void SpatialExpanderAudioProcessorEditor::timerCallback()
     {
         double loudness = processor.getLoudness();
         if (loudness < -60.0)
-            loudnessLabel.setText ("Momentary: --", juce::dontSendNotification);
+    loudnessLabel.setText ("Momentary Loudness: --", juce::dontSendNotification);
         else
-            loudnessLabel.setText ("Momentary: " + juce::String (loudness, 1) + " LUFS",
+            loudnessLabel.setText ("Momentary Loudness: " + juce::String (loudness, 1) + " LUFS",
                                    juce::dontSendNotification);
     }
 

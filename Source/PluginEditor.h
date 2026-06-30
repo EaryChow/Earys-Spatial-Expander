@@ -69,6 +69,8 @@ private:
     juce::ToggleButton chGainToggle;
     juce::Label chGainInfoLabel;
 
+    juce::ToggleButton debugToggle;
+
     juce::Slider chOffSliders[numChOff];
     juce::Label chOffLabels[numChOff];
     std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> chOffAttachments[numChOff];
