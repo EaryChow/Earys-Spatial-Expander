@@ -16,6 +16,17 @@ public:
                   int outputFormat);
     double getMomentaryLoudness() const noexcept;
 
+    struct ChannelDebugInfo
+    {
+        juce::AudioChannelSet::ChannelType type = juce::AudioChannelSet::unknown;
+        double kWeightedDbfs = -100.0;
+        double weight = 0.0;
+    };
+    const std::vector<ChannelDebugInfo>& getChannelDebugInfo() const noexcept
+    {
+        return channelDebugInfo;
+    }
+
 private:
     struct Biquad
     {
@@ -34,7 +45,8 @@ private:
 
     void designKFilter (double sampleRate);
     static double getChannelWeight (juce::AudioChannelSet::ChannelType type,
-                                   int channelIndex, int outputFormat);
+                                   int channelIndex, int outputFormat,
+                                   const juce::AudioChannelSet& layout);
 
     double sampleRate = 48000.0;
     int maxChannels = 0;
@@ -42,6 +54,7 @@ private:
     std::vector<Biquad> stage1;
     std::vector<Biquad> stage2;
     std::vector<double> channelWeights;
+    std::vector<double> chSqSum;
 
     std::vector<double> powerWindow;
     int windowSize = 0;
@@ -50,6 +63,8 @@ private:
     double runningSum = 0.0;
 
     std::atomic<double> momentaryLoudness { -70.0 };
+
+    std::vector<ChannelDebugInfo> channelDebugInfo;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (LoudnessMeter)
 };

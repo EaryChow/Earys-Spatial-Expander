@@ -160,13 +160,30 @@ SpatialExpanderAudioProcessorEditor::SpatialExpanderAudioProcessorEditor (
     loudnessLabel.setFont (juce::Font (juce::FontOptions (14.0f, juce::Font::bold)));
     loudnessLabel.setColour (juce::Label::textColourId, juce::Colours::lime);
     loudnessLabel.setJustificationType (juce::Justification::centred);
-    loudnessLabel.setText ("Integrated: --", juce::dontSendNotification);
+    loudnessLabel.setText ("Momentary: --", juce::dontSendNotification);
     addAndMakeVisible (loudnessLabel);
 
-    warningLabel.setFont (juce::Font (juce::FontOptions (12.0f)));
-    warningLabel.setColour (juce::Label::textColourId, juce::Colours::orange);
-    warningLabel.setJustificationType (juce::Justification::centred);
-    addAndMakeVisible (warningLabel);
+    debugText.setMultiLine (true, true);
+    debugText.setReadOnly (true);
+    debugText.setScrollbarsShown (false);
+    debugText.setCaretVisible (false);
+    debugText.setJustification (juce::Justification::centredLeft);
+    debugText.setFont (juce::Font (juce::FontOptions (10.0f)));
+    debugText.setColour (juce::TextEditor::textColourId, juce::Colours::yellow);
+    debugText.setColour (juce::TextEditor::backgroundColourId, juce::Colours::transparentBlack);
+    debugText.setColour (juce::TextEditor::outlineColourId, juce::Colours::transparentBlack);
+    addAndMakeVisible (debugText);
+
+    warningText.setMultiLine (true, true);
+    warningText.setReadOnly (true);
+    warningText.setScrollbarsShown (false);
+    warningText.setCaretVisible (false);
+    warningText.setJustification (juce::Justification::centred);
+    warningText.setFont (juce::Font (juce::FontOptions (12.0f)));
+    warningText.setColour (juce::TextEditor::textColourId, juce::Colours::orange);
+    warningText.setColour (juce::TextEditor::backgroundColourId, juce::Colours::transparentBlack);
+    warningText.setColour (juce::TextEditor::outlineColourId, juce::Colours::transparentBlack);
+    addAndMakeVisible (warningText);
 
     // Per-Channel Gain panel
     chGainToggle.setButtonText ("Per-Channel Gain");
@@ -206,7 +223,7 @@ SpatialExpanderAudioProcessorEditor::SpatialExpanderAudioProcessorEditor (
     updateFormatComboBox();
     updateChGainPanel();
 
-    setSize (550, 640);
+    setSize (550, 720);
     startTimerHz (4);
 }
 
@@ -247,12 +264,12 @@ void SpatialExpanderAudioProcessorEditor::updateChGainPanel()
         int extraRows = 0;
         for (int i = 0; i < numChOff; ++i)
             if (visible[i]) ++extraRows;
-        int newH = 640 + 24 + static_cast<int> (chGainInfoLabel.getFont().getHeight()) + 6 + extraRows * 34 + 10;
+        int newH = 720 + 24 + static_cast<int> (chGainInfoLabel.getFont().getHeight()) + 6 + extraRows * 34 + 10;
         setSize (550, newH);
     }
     else
     {
-        setSize (550, 640);
+        setSize (550, 720);
     }
 }
 
@@ -334,7 +351,11 @@ void SpatialExpanderAudioProcessorEditor::resized()
     auto loudArea = area.removeFromTop (24);
     loudnessLabel.setBounds (loudArea.reduced (10, 0));
 
-    warningLabel.setBounds (area.reduced (10, 0));
+    auto debugArea = area.removeFromTop (80);
+    debugText.setBounds (debugArea.reduced (10, 2));
+
+    auto warnArea = area.removeFromBottom (60);
+    warningText.setBounds (warnArea.reduced (10, 2));
 }
 
 void SpatialExpanderAudioProcessorEditor::timerCallback()
@@ -347,13 +368,13 @@ void SpatialExpanderAudioProcessorEditor::timerCallback()
         auto inputWarn  = processor.getInputWarningText();
         auto formatWarn = processor.getFormatWarningText (formatIdx);
         if (inputWarn.isNotEmpty() && formatWarn.isNotEmpty())
-            warningLabel.setText (inputWarn + "  " + formatWarn, juce::dontSendNotification);
+            warningText.setText (inputWarn + "\n" + formatWarn, juce::dontSendNotification);
         else if (inputWarn.isNotEmpty())
-            warningLabel.setText (inputWarn, juce::dontSendNotification);
+            warningText.setText (inputWarn, juce::dontSendNotification);
         else if (formatWarn.isNotEmpty())
-            warningLabel.setText (formatWarn, juce::dontSendNotification);
+            warningText.setText (formatWarn, juce::dontSendNotification);
         else
-            warningLabel.setText ({}, juce::dontSendNotification);
+            warningText.setText ({}, juce::dontSendNotification);
     }
 
     {
@@ -364,6 +385,8 @@ void SpatialExpanderAudioProcessorEditor::timerCallback()
             loudnessLabel.setText ("Momentary: " + juce::String (loudness, 1) + " LUFS",
                                    juce::dontSendNotification);
     }
+
+    debugText.setText (processor.getLoudnessDebugText(), juce::dontSendNotification);
 
     // Disable Stretch control in 3.1 mode
     int numSpecOut = processor.getNumSpectralOutputs();

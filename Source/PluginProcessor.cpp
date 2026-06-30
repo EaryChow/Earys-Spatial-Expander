@@ -2472,6 +2472,61 @@ void SpatialExpanderAudioProcessor::triggerPendingRecalibration()
     }
 }
 
+static juce::String getChannelTypeName (juce::AudioChannelSet::ChannelType type)
+{
+    using CT = juce::AudioChannelSet::ChannelType;
+    switch (type)
+    {
+        case CT::left: return "L";
+        case CT::right: return "R";
+        case CT::centre: return "C";
+        case CT::LFE: return "LFE";
+        case CT::leftSurround: return "Ls";
+        case CT::rightSurround: return "Rs";
+        case CT::leftSurroundSide: return "Lss";
+        case CT::rightSurroundSide: return "Rss";
+        case CT::leftSurroundRear: return "Lsr";
+        case CT::rightSurroundRear: return "Rsr";
+        case CT::wideLeft: return "Lw";
+        case CT::wideRight: return "Rw";
+        case CT::leftCentre: return "Lc";
+        case CT::rightCentre: return "Rc";
+        case CT::topFrontLeft: return "Tfl";
+        case CT::topFrontRight: return "Tfr";
+        case CT::topFrontCentre: return "Tfc";
+        case CT::topRearLeft: return "Trl";
+        case CT::topRearRight: return "Trr";
+        case CT::topSideLeft: return "Tsl";
+        case CT::topSideRight: return "Tsr";
+        case CT::unknown: return "?";
+        default: return "Ch";
+    }
+}
+
+juce::String SpatialExpanderAudioProcessor::getLoudnessDebugText() const
+{
+    auto& info = loudnessMeter.getChannelDebugInfo();
+    juce::String text;
+    int count = 0;
+
+    for (size_t i = 0; i < info.size(); ++i)
+    {
+        const auto& ch = info[i];
+        if (ch.type == juce::AudioChannelSet::unknown && ch.weight <= 0.0)
+            continue;
+
+        juce::String name = getChannelTypeName (ch.type);
+        if (name == "?")
+            name = "Ch" + juce::String (static_cast<int> (i));
+
+        if (count > 0) text += "\n";
+        text += name + " " + juce::String (ch.kWeightedDbfs, 1)
+              + " dBFS(w=" + juce::String (ch.weight, 2) + ")";
+        ++count;
+    }
+    return text;
+}
+
 bool SpatialExpanderAudioProcessor::isBypassed() const noexcept
 {
     int idx = static_cast<int> (apvts.getRawParameterValue ("latency")->load());

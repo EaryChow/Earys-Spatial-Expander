@@ -10,6 +10,9 @@ void LoudnessMeter::prepare (double sr, int maxCh)
     stage2.assign (maxChannels, Biquad{});
     channelWeights.assign (maxChannels, 0.0);
 
+    chSqSum.resize (maxChannels);
+    channelDebugInfo.resize (maxChannels);
+
     windowSize = static_cast<int> (std::ceil (sr * 0.4));
     powerWindow.assign (windowSize, 0.0);
 
@@ -114,57 +117,105 @@ void LoudnessMeter::designKFilter (double sr)
 }
 
 double LoudnessMeter::getChannelWeight (juce::AudioChannelSet::ChannelType type,
-                                        int chIndex, int outputFormat)
+                                        int chIndex, int outputFormat,
+                                        const juce::AudioChannelSet& layout)
 {
     using CT = juce::AudioChannelSet::ChannelType;
+    (void) outputFormat;
 
     if (type == CT::LFE) return 0.0;
 
-    if (type == CT::left || type == CT::right || type == CT::centre ||
-        type == CT::leftCentre || type == CT::rightCentre)
+    // Unambiguous front
+    if (type == CT::left || type == CT::right || type == CT::centre)
         return 1.0;
 
-    if (type == CT::wideLeft || type == CT::wideRight)
-        return 1.41;
-
+    // Unambiguous side (90°)
     if (type == CT::leftSurroundSide || type == CT::rightSurroundSide)
         return 1.41;
 
+    // Unambiguous rear (>120°)
     if (type == CT::leftSurroundRear || type == CT::rightSurroundRear)
         return 1.0;
 
-    if (type == CT::leftSurround || type == CT::rightSurround)
+    // Unambiguous wide
+    if (type == CT::wideLeft || type == CT::wideRight)
         return 1.41;
 
+    // Ambiguous: leftCentre / rightCentre
+    // Fairlight (and some other DAWs) use Lc/Rc for the ±60° wide pair in 9.1+ beds.
+    // In small layouts (≤ 5.1) Lc/Rc might genuinely be front-half (~15°), so keep 1.0.
+    if (type == CT::leftCentre || type == CT::rightCentre)
+        return (layout.size() >= 10) ? 1.41 : 1.0;
+
+    // Ambiguous: leftSurround / rightSurround
+    // This type is a catch-all. Disambiguate by looking at what OTHER specific types
+    // the DAW provided in the same layout:
+    //   - If Lss/Rss exists but Lsr/Rsr does NOT → Ls is rear   (Fairlight) → 1.00
+    //   - If Lsr/Rsr exists but Lss/Rss does NOT → Ls is side   (Standard)  → 1.41
+    //   - If both exist                          → Ls is 5.1 surround      → 1.41
+    //   - If neither exists                      → pure 5.1 layout         → 1.41
+    if (type == CT::leftSurround || type == CT::rightSurround)
+    {
+        bool hasSide = false;
+        bool hasRear = false;
+        for (int ch = 0; ch < layout.size(); ++ch)
+        {
+            auto t = layout.getTypeOfChannel (ch);
+            if (t == CT::leftSurroundSide || t == CT::rightSurroundSide) hasSide = true;
+            if (t == CT::leftSurroundRear || t == CT::rightSurroundRear) hasRear = true;
+        }
+
+        if (hasSide && !hasRear)      return 1.0;   // Fairlight convention
+        if (!hasSide && hasRear)      return 1.41;  // Standard JUCE convention
+        return 1.41;                                   // 5.1 surround or side
+    }
+
+    // Height / top channels (|φ| ≥ 30°) → 1.00
     if (type == CT::topFrontLeft  || type == CT::topFrontRight ||
         type == CT::topFrontCentre|| type == CT::topRearLeft    ||
         type == CT::topRearRight  || type == CT::topSideLeft    ||
         type == CT::topSideRight)
         return 1.0;
 
+    // Unknown / discrete layouts: index fallback (best guess)
     if (type == CT::unknown)
     {
-        if (outputFormat <= 3)
+        int n = layout.size();
+        // Count bed channels by stripping trailing top channels
+        int bedChannels = n;
+        for (int ch = n - 1; ch >= 0; --ch)
+        {
+            auto t = layout.getTypeOfChannel (ch);
+            if (t == CT::topFrontLeft || t == CT::topFrontRight || t == CT::topFrontCentre ||
+                t == CT::topRearLeft  || t == CT::topRearRight  || t == CT::topSideLeft ||
+                t == CT::topSideRight)
+                --bedChannels;
+            else
+                break;
+        }
+
+        if (bedChannels <= 3)       // 3.0
         {
             if (chIndex <= 2) return 1.0;
         }
-        else if (outputFormat <= 5)
+        else if (bedChannels <= 6)  // 5.1
         {
             if (chIndex <= 2) return 1.0;
-            if (chIndex == 3) return 0.0;
-            if (chIndex == 4 || chIndex == 5) return 1.41;
+            if (chIndex == 3) return 0.0;      // LFE
+            if (chIndex >= 4) return 1.41;
         }
-        else if (outputFormat <= 7)
+        else if (bedChannels <= 8)  // 7.1
         {
             if (chIndex <= 2) return 1.0;
-            if (chIndex == 3) return 0.0;
+            if (chIndex == 3) return 0.0;      // LFE
             if (chIndex == 4 || chIndex == 5) return 1.41;
             if (chIndex == 6 || chIndex == 7) return 1.0;
         }
-        else
+        else                        // 9.1+
         {
             if (chIndex <= 2) return 1.0;
-            if (chIndex == 3) return 0.0;
+            if (chIndex == 3) return 0.0;      // LFE
+            // Standard bed: 4,5=side, 6,7=rear, 8,9=wide
             if (chIndex == 4 || chIndex == 5) return 1.41;
             if (chIndex == 6 || chIndex == 7) return 1.0;
             if (chIndex == 8 || chIndex == 9) return 1.41;
@@ -182,10 +233,11 @@ void LoudnessMeter::process (const juce::AudioBuffer<float>& buffer,
     int numSamples  = buffer.getNumSamples();
 
     for (int ch = 0; ch < numChannels; ++ch)
-        channelWeights[ch] = getChannelWeight (layout.getTypeOfChannel (ch), ch, outputFormat);
+        channelWeights[ch] = getChannelWeight (layout.getTypeOfChannel (ch), ch, outputFormat, layout);
     for (int ch = numChannels; ch < maxChannels; ++ch)
         channelWeights[ch] = 0.0;
 
+    std::fill (chSqSum.begin(), chSqSum.begin() + numChannels, 0.0);
     double currentLoudness = -100.0;
 
     for (int i = 0; i < numSamples; ++i)
@@ -195,11 +247,13 @@ void LoudnessMeter::process (const juce::AudioBuffer<float>& buffer,
         for (int ch = 0; ch < numChannels; ++ch)
         {
             double w = channelWeights[ch];
-            if (w <= 0.0) continue;
-
             double s = static_cast<double> (buffer.getReadPointer (ch)[i]);
             double y1 = stage1[ch].process (s);
             double y2 = stage2[ch].process (y1);
+
+            chSqSum[static_cast<size_t> (ch)] += y2 * y2;
+
+            if (w <= 0.0) continue;
             weightedPower += w * y2 * y2;
         }
 
@@ -223,6 +277,22 @@ void LoudnessMeter::process (const juce::AudioBuffer<float>& buffer,
             currentLoudness = -0.691 + 10.0 * std::log10 (meanPower);
         else
             currentLoudness = -100.0;
+    }
+
+    for (int ch = 0; ch < numChannels; ++ch)
+    {
+        auto& d = channelDebugInfo[static_cast<size_t> (ch)];
+        d.type = layout.getTypeOfChannel (ch);
+        d.weight = channelWeights[ch];
+        double rms = std::sqrt (chSqSum[static_cast<size_t> (ch)] / numSamples);
+        d.kWeightedDbfs = 20.0 * std::log10 (rms + 1e-18);
+    }
+    for (int ch = numChannels; ch < maxChannels; ++ch)
+    {
+        auto& d = channelDebugInfo[static_cast<size_t> (ch)];
+        d.type = juce::AudioChannelSet::unknown;
+        d.weight = 0.0;
+        d.kWeightedDbfs = -100.0;
     }
 
     momentaryLoudness.store (currentLoudness);

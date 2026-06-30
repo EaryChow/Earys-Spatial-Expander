@@ -80,7 +80,8 @@ private:
     // juce::Label latencyResultLabel;
 
     juce::Label loudnessLabel;
-    juce::Label warningLabel;
+    juce::TextEditor debugText;
+    juce::TextEditor warningText;
 
     int lastDetectedFormat = -1;
     int lastMinOut = -1;
