@@ -1,8 +1,8 @@
-#include "StereoSTFT.h"
+#include "SurroundSTFT.h"
 
-StereoSTFT::StereoSTFT() : fft (std::make_unique<juce::dsp::FFT> (fftOrder)) {}
+SurroundSTFT::SurroundSTFT() : fft (std::make_unique<juce::dsp::FFT> (fftOrder)) {}
 
-void StereoSTFT::allocateBuffers()
+void SurroundSTFT::allocateBuffers()
 {
     window.resize (fftSize);
     double beta = 0.5;
@@ -22,8 +22,9 @@ void StereoSTFT::allocateBuffers()
         synthWindow[i] = (sumSq > 1e-12f) ? window[i] / sumSq : window[i];
     }
 
-    inBufL.assign (fftSize, 0.0f);
-    inBufR.assign (fftSize, 0.0f);
+    inBufs.resize (numInputs);
+    for (int ch = 0; ch < numInputs; ++ch)
+        inBufs[ch].assign (fftSize, 0.0f);
 
     auto outBufSize = static_cast<size_t> (fftSize) * 4;
     outBufs.resize (numOutputs);
@@ -31,15 +32,16 @@ void StereoSTFT::allocateBuffers()
         outBufs[ch].assign (outBufSize, 0.0f);
 
     auto fftBufSize = static_cast<size_t> (fftSize) * 2;
-    fftBufL.assign (fftBufSize, 0.0f);
-    fftBufR.assign (fftBufSize, 0.0f);
+    fftBufsInput.resize (numInputs);
+    for (int ch = 0; ch < numInputs; ++ch)
+        fftBufsInput[ch].assign (fftBufSize, 0.0f);
 
     fftBufs.resize (numOutputs);
     for (int ch = 0; ch < numOutputs; ++ch)
         fftBufs[ch].assign (fftBufSize, 0.0f);
 }
 
-void StereoSTFT::setNumOutputs (int n)
+void SurroundSTFT::setNumOutputs (int n)
 {
     if (n == numOutputs)
         return;
@@ -51,13 +53,25 @@ void StereoSTFT::setNumOutputs (int n)
     }
 }
 
-void StereoSTFT::prepare (double)
+void SurroundSTFT::setNumInputs (int n)
+{
+    if (n == numInputs)
+        return;
+    numInputs = n;
+    if (fftSize > 0)
+    {
+        allocateBuffers();
+        reset();
+    }
+}
+
+void SurroundSTFT::prepare (double)
 {
     allocateBuffers();
     reset();
 }
 
-void StereoSTFT::setWindowSize (int newFftOrder)
+void SurroundSTFT::setWindowSize (int newFftOrder)
 {
     if (newFftOrder == fftOrder)
         return;
@@ -71,14 +85,13 @@ void StereoSTFT::setWindowSize (int newFftOrder)
     reset();
 }
 
-void StereoSTFT::reset()
+void SurroundSTFT::reset()
 {
-    if (! inBufL.empty())
-    {
-        std::fill (inBufL.begin(), inBufL.end(), 0.0f);
-        std::fill (inBufR.begin(), inBufR.end(), 0.0f);
-    }
+    for (auto& buf : inBufs)
+        std::fill (buf.begin(), buf.end(), 0.0f);
     for (auto& buf : outBufs)
+        std::fill (buf.begin(), buf.end(), 0.0f);
+    for (auto& buf : fftBufsInput)
         std::fill (buf.begin(), buf.end(), 0.0f);
     for (auto& buf : fftBufs)
         std::fill (buf.begin(), buf.end(), 0.0f);
@@ -88,17 +101,29 @@ void StereoSTFT::reset()
     outRp = fftSize - hopSize;
     outReady = 0;
     framesCompleted = 0;
+    activeInputs = 2;
 }
 
-void StereoSTFT::process (const float* inL, const float* inR,
-                           float** outputs, int numSamples)
+void SurroundSTFT::process (const float* inL, const float* inR,
+                             float** outputs, int numSamples)
+{
+    const float* inputs[2] = { inL, inR };
+    activeInputs = std::min (2, numInputs);
+    process (inputs, activeInputs, outputs, numOutputs, numSamples);
+}
+
+void SurroundSTFT::process (const float** inputs, int numInputs_,
+                             float** outputs, int outCh,
+                             int numSamples)
 {
     auto outBufSize = static_cast<int> (outBufs[0].size());
+    activeInputs = std::min (numInputs_, numInputs);
+    int inCh = activeInputs;
 
     for (int i = 0; i < numSamples; ++i)
     {
-        inBufL[inWp] = inL[i];
-        inBufR[inWp] = inR[i];
+        for (int ch = 0; ch < inCh; ++ch)
+            inBufs[ch][inWp] = inputs[ch][i];
         inWp = (inWp + 1) % fftSize;
         ++totalIn;
 
@@ -109,7 +134,7 @@ void StereoSTFT::process (const float* inL, const float* inR,
     int available = std::min (numSamples, outReady);
     for (int i = 0; i < available; ++i)
     {
-        for (int ch = 0; ch < numOutputs; ++ch)
+        for (int ch = 0; ch < outCh; ++ch)
         {
             outputs[ch][i] = outBufs[ch][outRp];
             outBufs[ch][outRp] = 0.0f;
@@ -119,46 +144,48 @@ void StereoSTFT::process (const float* inL, const float* inR,
     outReady -= available;
 
     for (int i = available; i < numSamples; ++i)
-    {
-        for (int ch = 0; ch < numOutputs; ++ch)
+        for (int ch = 0; ch < outCh; ++ch)
             outputs[ch][i] = 0.0f;
-    }
 }
 
-void StereoSTFT::processFrame()
+void SurroundSTFT::processFrame()
 {
     auto outBufSize = static_cast<int> (outBufs[0].size());
     int outCh = numOutputs;
+    int inCh = activeInputs;
 
-    for (int i = 0; i < fftSize; ++i)
+    for (int ch = 0; ch < inCh; ++ch)
     {
-        int idx = (inWp + i) % fftSize;
-        fftBufL[i] = inBufL[idx] * window[i];
-        fftBufR[i] = inBufR[idx] * window[i];
+        auto& fftBuf = fftBufsInput[ch];
+        auto& inBuf  = inBufs[ch];
+        for (int i = 0; i < fftSize; ++i)
+        {
+            int idx = (inWp + i) % fftSize;
+            fftBuf[i] = inBuf[idx] * window[i];
+        }
+        std::fill (fftBuf.begin() + fftSize, fftBuf.end(), 0.0f);
+        fft->performRealOnlyForwardTransform (fftBuf.data());
     }
-    std::fill (fftBufL.begin() + fftSize, fftBufL.end(), 0.0f);
-    std::fill (fftBufR.begin() + fftSize, fftBufR.end(), 0.0f);
-
-    fft->performRealOnlyForwardTransform (fftBufL.data());
-    fft->performRealOnlyForwardTransform (fftBufR.data());
 
     if (frameListener != nullptr)
     {
+        std::vector<const float*> fftInputs (inCh);
+        for (int ch = 0; ch < inCh; ++ch)
+            fftInputs[ch] = fftBufsInput[ch].data();
+
         std::vector<float*> fftPtrs (outCh);
         for (int ch = 0; ch < outCh; ++ch)
             fftPtrs[ch] = fftBufs[ch].data();
 
-        frameListener->onFrame (fftBufL.data(), fftBufR.data(),
+        frameListener->onFrame (fftInputs.data(), inCh,
                                 fftPtrs.data(), outCh, fftSize);
     }
     else
     {
         for (int ch = 0; ch < outCh; ++ch)
         {
-            if (ch == 0)
-                std::copy (fftBufL.begin(), fftBufL.begin() + fftSize, fftBufs[ch].begin());
-            else if (ch == 1)
-                std::copy (fftBufR.begin(), fftBufR.begin() + fftSize, fftBufs[ch].begin());
+            if (ch < numInputs)
+                std::copy (fftBufsInput[ch].begin(), fftBufsInput[ch].begin() + fftSize, fftBufs[ch].begin());
             else
                 std::fill (fftBufs[ch].begin(), fftBufs[ch].begin() + fftSize, 0.0f);
         }

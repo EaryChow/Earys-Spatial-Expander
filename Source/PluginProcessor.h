@@ -3,11 +3,11 @@
 #include <random>
 #include <JuceHeader.h>
 #include "DSP/LFEExtractor.h"
-#include "DSP/StereoSTFT.h"
+#include "DSP/SurroundSTFT.h"
 #include "DSP/SpatialAnalyser.h"
 
 class SpatialExpanderAudioProcessor : public juce::AudioProcessor,
-                                       private StereoSTFT::FrameListener,
+                                       private SurroundSTFT::FrameListener,
                                        private juce::AudioProcessorValueTreeState::Listener,
                                        private juce::AsyncUpdater
 {
@@ -56,11 +56,13 @@ public:
 
     enum OutputFormat { Auto = 0, Fmt30, Fmt51, Fmt71, Fmt916 };
     enum AuxBusIdx { AuxFront = 1, AuxCenter, AuxLFE, AuxWide, AuxSide, AuxRear };
+    enum class InputFormat { Stereo, In51, In71 };
 
 private:
     int detectFormatFromBus() const noexcept;
+    InputFormat detectInputFormatFromBus() const noexcept;
 
-    void onFrame (const float* fftL, const float* fftR,
+    void onFrame (const float** fftInputs, int numInputs,
                   float** fftOutputs, int numOutputs,
                   int fftSize) override;
 
@@ -78,10 +80,10 @@ private:
                        int fftSize, float stretch, int numSpecOut);
 
     void applyCrosstalk (float* fftCenter, float* fftFrontL, float* fftFrontR,
-                         float* fftWideL, float* fftWideR,
-                         float* fftSideL, float* fftSideR,
-                         float* fftRearL, float* fftRearR,
-                         int fftSize, int numSpecOut, float crosstalkVal);
+                          float* fftWideL, float* fftWideR,
+                          float* fftSideL, float* fftSideR,
+                          float* fftRearL, float* fftRearR,
+                          int fftSize, int numSpecOut, float crosstalkVal);
 
     void parameterChanged (const juce::String& parameterID, float newValue) override;
     void handleAsyncUpdate() override;
@@ -103,7 +105,7 @@ private:
     static constexpr int ildTableSize = 1201;   // 0.1 dB steps from -60 to +60 dB
     std::vector<float> gainTable;
 
-    StereoSTFT stft;
+    SurroundSTFT stft;
     SpatialAnalyser analyser;
     LFEExtractor lfe;
 
@@ -130,6 +132,15 @@ private:
     std::vector<float> cascadeRresSave;
     int cascadeFftSize = 0;
 
+    // Pre-allocated multi-input buffers (surround upmix path)
+    std::vector<float> fftBC;
+    std::vector<float> fftSLp;
+    std::vector<float> fftSRp;
+    std::vector<float> fftRLp;
+    std::vector<float> fftRRp;
+    std::vector<float> fftL_syn;
+    std::vector<float> fftR_syn;
+
     // Per-bin static calibration gains (no temporal smoothing)
     std::vector<float> binCalGains;
     std::vector<float> binCalGainsSmoothed;
@@ -145,6 +156,9 @@ private:
 
     std::vector<float> measInput;
     std::vector<std::vector<float>> measOutput;
+
+    // Gain staging constants for surround upmix
+
 
     juce::AudioProcessorValueTreeState apvts;
 

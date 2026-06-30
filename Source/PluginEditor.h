@@ -30,6 +30,10 @@ private:
     juce::Label lfeLevelLabel;
     std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> lfeLevelAttach;
 
+    juce::ComboBox inFormatComboBox;
+    juce::Label inFormatLabel;
+    std::unique_ptr<juce::AudioProcessorValueTreeState::ComboBoxAttachment> inFormatAttach;
+
     juce::ComboBox formatComboBox;
     juce::Label formatLabel;
     std::unique_ptr<juce::AudioProcessorValueTreeState::ComboBoxAttachment> formatAttach;

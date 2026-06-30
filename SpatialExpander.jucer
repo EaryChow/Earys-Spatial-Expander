@@ -11,8 +11,8 @@
             file="Source/PluginProcessor.cpp"/>
       <FILE id="EdH" name="PluginEditor.h" compile="0" resource="0" file="Source/PluginEditor.h"/>
       <FILE id="EdC" name="PluginEditor.cpp" compile="1" resource="0" file="Source/PluginEditor.cpp"/>
-      <FILE id="STFTH" name="StereoSTFT.h" compile="0" resource="0" file="Source/DSP/StereoSTFT.h"/>
-      <FILE id="STFTC" name="StereoSTFT.cpp" compile="1" resource="0" file="Source/DSP/StereoSTFT.cpp"/>
+      <FILE id="STFTH" name="SurroundSTFT.h" compile="0" resource="0" file="Source/DSP/SurroundSTFT.h"/>
+      <FILE id="STFTC" name="SurroundSTFT.cpp" compile="1" resource="0" file="Source/DSP/SurroundSTFT.cpp"/>
       <FILE id="LFEEH" name="LFEExtractor.h" compile="0" resource="0" file="Source/DSP/LFEExtractor.h"/>
       <FILE id="LFEEC" name="LFEExtractor.cpp" compile="1" resource="0" file="Source/DSP/LFEExtractor.cpp"/>
       <FILE id="SAH" name="SpatialAnalyser.h" compile="0" resource="0" file="Source/DSP/SpatialAnalyser.h"/>

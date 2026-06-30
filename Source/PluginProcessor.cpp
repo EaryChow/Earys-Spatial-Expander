@@ -16,6 +16,8 @@ SpatialExpanderAudioProcessor::SpatialExpanderAudioProcessor()
               juce::NormalisableRange<float> (40.0f, 200.0f, 1.0f), 80.0f),
           std::make_unique<juce::AudioParameterFloat> ("lfeLevel", "LFE Level",
               juce::NormalisableRange<float> (-12.1f, 12.0f, 0.1f), 0.0f),
+          std::make_unique<juce::AudioParameterChoice> ("inputFormat", "Input Format",
+              juce::StringArray { "Stereo", "5.1", "7.1" }, 0),
           std::make_unique<juce::AudioParameterChoice> ("outputFormat", "Output Format",
               juce::StringArray { "Auto", "3.0", "5.1", "7.1", "9.1" }, 0),
           std::make_unique<juce::AudioParameterChoice> ("latency", "Latency",
@@ -52,6 +54,7 @@ SpatialExpanderAudioProcessor::SpatialExpanderAudioProcessor()
 {
     stft.setFrameListener (this);
     apvts.addParameterListener ("latency", this);
+    apvts.addParameterListener ("inputFormat", this);
     apvts.addParameterListener ("outputFormat", this);
     apvts.addParameterListener ("rearBias", this);
     apvts.addParameterListener ("crosstalk", this);
@@ -69,9 +72,9 @@ const juce::String SpatialExpanderAudioProcessor::getName() const
 
 bool SpatialExpanderAudioProcessor::isBusesLayoutSupported (const BusesLayout& layouts) const
 {
-    auto inLayout = layouts.getMainInputChannelSet();
+    auto inLayout  = layouts.getMainInputChannelSet();
     auto outLayout = layouts.getMainOutputChannelSet();
-    auto inSize = inLayout.size();
+    auto inSize  = inLayout.size();
     auto outSize = outLayout.size();
 
     if (inSize < 2 || outSize < 2)
@@ -86,13 +89,16 @@ bool SpatialExpanderAudioProcessor::isBusesLayoutSupported (const BusesLayout& l
     if (inSize == outSize)
         return true;
 
+    // Explicitly accept 5.1 and 7.1 input layouts for the surround upmix path
+    if (inLayout == juce::AudioChannelSet::create5point1() ||
+        inLayout == juce::AudioChannelSet::create7point1())
+        return true;
+
     // For node-based hosts that allow independent I/O (e.g. Cantabile).
     if (inLayout == juce::AudioChannelSet::stereo())
         return true;
 
     // Fallback: accept any layout with at least stereo input and output.
-    // We only read input channels 0-1 (L/R) and explicitly map all outputs
-    // via channelMap, so any channel count is safe.
     return true;
 }
 
@@ -157,6 +163,12 @@ int SpatialExpanderAudioProcessor::detectFormatFromBus() const noexcept
     return Fmt30;
 }
 
+SpatialExpanderAudioProcessor::InputFormat SpatialExpanderAudioProcessor::detectInputFormatFromBus() const noexcept
+{
+    int idx = static_cast<int> (apvts.getRawParameterValue ("inputFormat")->load());
+    return static_cast<InputFormat> (idx);  // 0=Stereo, 1=5.1, 2=7.1
+}
+
 int SpatialExpanderAudioProcessor::getNumSpectralOutputs() const noexcept
 {
     int fmt = static_cast<int> (apvts.getRawParameterValue ("outputFormat")->load());
@@ -180,6 +192,11 @@ void SpatialExpanderAudioProcessor::prepareToPlay (double sampleRate, int sample
     int order = 9 + idx;
 
     int numSpecOut = getNumSpectralOutputs();
+    auto inputFmt = detectInputFormatFromBus();
+    int numInputCh = (inputFmt == InputFormat::In51) ? 5
+                    : (inputFmt == InputFormat::In71) ? 7 : 2;
+
+    stft.setNumInputs (numInputCh);
     stft.setNumOutputs (numSpecOut);
     stft.setWindowSize (order);
     stft.prepare (sampleRate);
@@ -224,6 +241,15 @@ void SpatialExpanderAudioProcessor::prepareToPlay (double sampleRate, int sample
     cascadeLresSave.assign (cs, 0.0f);
     cascadeRresSave.assign (cs, 0.0f);
 
+    // Pre-allocate multi-input buffers for surround upmix path
+    fftBC.assign (cs, 0.0f);
+    fftSLp.assign (cs, 0.0f);
+    fftSRp.assign (cs, 0.0f);
+    fftRLp.assign (cs, 0.0f);
+    fftRRp.assign (cs, 0.0f);
+    fftL_syn.assign (cs, 0.0f);
+    fftR_syn.assign (cs, 0.0f);
+
     binCalGains.resize (cs / 2 + 1, 1.0f);
     binCalGainsSmoothed.resize (cs / 2 + 1, 1.0f);
 
@@ -263,8 +289,79 @@ void SpatialExpanderAudioProcessor::processBlock (juce::AudioBuffer<float>& buff
         return;
     }
 
+    auto inputFmt = detectInputFormatFromBus();
+
+    // Build canonical multi-channel input array by type
+    // Canonical order: [L, R, C, surroundL, surroundR, sideL, sideR, rearL, rearR]
     auto* inL = buffer.getReadPointer (0);
     auto* inR = (numInChannels > 1) ? buffer.getReadPointer (1) : buffer.getReadPointer (0);
+    std::vector<const float*> inputPtrs;
+    int lfeInputChannel = -1;
+
+    if (inputFmt == InputFormat::In51 || inputFmt == InputFormat::In71)
+    {
+        auto layout = getBus (true, 0)->getCurrentLayout();
+        const float* l = nullptr, * r = nullptr, * c = nullptr;
+        const float* sl = nullptr, * sr = nullptr;   // surround pair (In51) or rear pair (In71)
+        const float* sdl = nullptr, * sdr = nullptr; // side pair (In71)
+
+        for (int ch = 0; ch < numInChannels; ++ch)
+        {
+            auto type = layout.getTypeOfChannel (ch);
+            auto* ptr = buffer.getReadPointer (ch);
+            if      (type == juce::AudioChannelSet::left)                         l = ptr;
+            else if (type == juce::AudioChannelSet::right)                        r = ptr;
+            else if (type == juce::AudioChannelSet::centre)                       c = ptr;
+            else if (type == juce::AudioChannelSet::LFE)                          lfeInputChannel = ch;
+            else if (type == juce::AudioChannelSet::leftSurroundRear)             sl = ptr;
+            else if (type == juce::AudioChannelSet::rightSurroundRear)            sr = ptr;
+            else if (type == juce::AudioChannelSet::leftSurroundSide)             sdl = ptr;
+            else if (type == juce::AudioChannelSet::rightSurroundSide)            sdr = ptr;
+            else if (type == juce::AudioChannelSet::leftSurround && sl == nullptr) sl = ptr;
+            else if (type == juce::AudioChannelSet::rightSurround && sr == nullptr) sr = ptr;
+        }
+
+        // Index fallback for discrete/custom layouts
+        auto idxPtr = [&](int i) { return (i < numInChannels) ? buffer.getReadPointer (i) : nullptr; };
+        if (l  == nullptr) l  = idxPtr (0);
+        if (r  == nullptr) r  = idxPtr (1);
+        if (c  == nullptr) c  = idxPtr (2);
+
+        // For In51 on a 7.1+ bus: surrounds may be on rear OR side. Try rear first, then generic, then side.
+        if (inputFmt == InputFormat::In51)
+        {
+            if (sl == nullptr && sr == nullptr) { sl = sdl; sr = sdr; }  // side → surround
+            // Index fallback for surrounds
+            if (sl == nullptr && numInChannels > 4) sl = idxPtr (numInChannels - 2); // second-to-last
+            if (sr == nullptr && numInChannels > 4) sr = idxPtr (numInChannels - 1); // last
+            // 5.1 on a 6-ch bus: surrounds are indices 4,5
+            if (sl == nullptr && numInChannels > 4)
+            {
+                int lfeAdj = (lfeInputChannel >= 0) ? 1 : 0;
+                int slIdx = (layout.getTypeOfChannel (4) == juce::AudioChannelSet::LFE) ? 5 : 4;
+                sl = idxPtr (slIdx + lfeAdj);
+                sr = idxPtr (slIdx + 1 + lfeAdj);
+            }
+            inputPtrs = { l, r, c, sl, sr };
+        }
+        else // In71
+        {
+            // For 7.1, try side channels first, then generic surround fallback
+            if (sdl == nullptr) sdl = (sl != nullptr) ? sl : idxPtr (3);
+            if (sdr == nullptr) sdr = (sr != nullptr) ? sr : idxPtr (4);
+            if (sl  == nullptr) sl  = idxPtr (5);
+            if (sr  == nullptr) sr  = idxPtr (6);
+            inputPtrs = { l, r, c, sdl, sdr, sl, sr };
+        }
+
+        // Update inL/inR for LFE extraction fallback
+        inL = inputPtrs[0];
+        inR = inputPtrs[1];
+    }
+    else
+    {
+        inputPtrs = { inL, inR };
+    }
 
     // --- Latency measurement: inject test signal into the live pipeline ---
     if (pendingLatencyMeasurement.load())
@@ -300,6 +397,15 @@ void SpatialExpanderAudioProcessor::processBlock (juce::AudioBuffer<float>& buff
 
                 inL = buffer.getReadPointer (0);
                 inR = (numInChannels > 1) ? buffer.getReadPointer (1) : buffer.getReadPointer (0);
+                // Rebuild input array after injection
+                if (inputFmt == InputFormat::In51 || inputFmt == InputFormat::In71)
+                {
+                    if (inputPtrs.size() >= 2)
+                    {
+                        inputPtrs[0] = inL;
+                        inputPtrs[1] = inR;
+                    }
+                }
             }
         }
     }
@@ -320,8 +426,38 @@ void SpatialExpanderAudioProcessor::processBlock (juce::AudioBuffer<float>& buff
 
     int numSpecOut = static_cast<int> (chOutputs.size());
 
-    stft.process (inL, inR, chOutputPtrs.data(), numSamples);
-    lfe.process (inL, inR, chLFE.data(), numSamples);
+    // Use multi-input STFT for surround formats, stereo wrapper for stereo
+    if (inputFmt == InputFormat::In51 || inputFmt == InputFormat::In71)
+    {
+        stft.process (inputPtrs.data(), static_cast<int> (inputPtrs.size()),
+                      chOutputPtrs.data(), numSpecOut, numSamples);
+    }
+    else
+    {
+        stft.process (inL, inR, chOutputPtrs.data(), numSamples);
+    }
+
+    // LFE handling:
+    // - For surround input with existing LFE: pass through (gain applied at output)
+    // - For stereo input or surround without LFE: use existing LFEExtractor
+    if (inputFmt == InputFormat::In51 || inputFmt == InputFormat::In71)
+    {
+        if (lfeInputChannel >= 0)
+        {
+            // Pass through raw LFE; output-stage lfeGain (with lfePrescale) handles level
+            auto* inLFE = buffer.getReadPointer (lfeInputChannel);
+            juce::FloatVectorOperations::copy (chLFE.data(), inLFE, numSamples);
+        }
+        else
+        {
+            // No LFE channel in input: fall back to extract from front channels
+            lfe.process (inL, inR, chLFE.data(), numSamples);
+        }
+    }
+    else
+    {
+        lfe.process (inL, inR, chLFE.data(), numSamples);
+    }
 
     // Leak Center: redistribute calibrated Center to Front L/R
     {
@@ -765,6 +901,15 @@ void SpatialExpanderAudioProcessor::parameterChanged (const juce::String& parame
         fadeSamplesLeft.store (fadeSamplesTotal);
         calState.store (CalState::FadingOut);
     }
+    else if (parameterID == "inputFormat")
+    {
+        if (calState.load() != CalState::Normal)
+            return;
+
+        pendingFormatChange.store (true);
+        fadeSamplesLeft.store (fadeSamplesTotal);
+        calState.store (CalState::FadingOut);
+    }
     else if (parameterID == "outputFormat")
     {
         if (calState.load() != CalState::Normal)
@@ -826,6 +971,13 @@ void SpatialExpanderAudioProcessor::handleAsyncUpdate()
         int fftSize = stft.fftSize;
         int hopSize = stft.hopSize;
 
+        int numInputCh = 2;
+        {
+            auto inFmt = detectInputFormatFromBus();
+            numInputCh = (inFmt == InputFormat::In51) ? 5
+                       : (inFmt == InputFormat::In71) ? 7 : 2;
+        }
+        stft.setNumInputs (numInputCh);
         stft.setNumOutputs (numSpecOut);
 
         if (newOrder > 0)
@@ -862,6 +1014,15 @@ void SpatialExpanderAudioProcessor::handleAsyncUpdate()
         cascadeTemp.assign (fftSize, 0.0f);
         cascadeLresSave.assign (fftSize, 0.0f);
         cascadeRresSave.assign (fftSize, 0.0f);
+
+        // Pre-allocate multi-input buffers
+        fftBC.assign (fftSize, 0.0f);
+        fftSLp.assign (fftSize, 0.0f);
+        fftSRp.assign (fftSize, 0.0f);
+        fftRLp.assign (fftSize, 0.0f);
+        fftRRp.assign (fftSize, 0.0f);
+        fftL_syn.assign (fftSize, 0.0f);
+        fftR_syn.assign (fftSize, 0.0f);
 
         binCalGains.resize (fftSize / 2 + 1, 1.0f);
         binCalGainsSmoothed.resize (fftSize / 2 + 1, 1.0f);
@@ -1213,12 +1374,334 @@ void SpatialExpanderAudioProcessor::applyCrosstalk (float* fftCenter, float* fft
     }
 }
 
-void SpatialExpanderAudioProcessor::onFrame (const float* fftL, const float* fftR,
+void SpatialExpanderAudioProcessor::onFrame (const float** fftInputs, int numInputs,
                                               float** fftOutputs, int numOutputs,
                                               int fftSize)
 {
     int numSpecOut = numOutputs;
+    auto inputFmt = detectInputFormatFromBus();
 
+    // ---- Stereo path (unchanged behavior) ----
+    if (numInputs <= 2 || inputFmt == InputFormat::Stereo)
+    {
+        const float* fftL = fftInputs[0];
+        const float* fftR = (numInputs > 1) ? fftInputs[1] : fftInputs[0];
+
+        // Ensure cascade buffers are sized
+        if (cascadeFftSize != fftSize)
+        {
+            cascadeCenter.resize (fftSize);
+            cascadeFrontL.resize (fftSize);
+            cascadeFrontR.resize (fftSize);
+            cascadeWideL.resize (fftSize);
+            cascadeWideR.resize (fftSize);
+            cascadeSideL.resize (fftSize);
+            cascadeSideR.resize (fftSize);
+            cascadeRearL.resize (fftSize);
+            cascadeRearR.resize (fftSize);
+            cascadeTemp.resize (fftSize);
+            cascadeLresSave.resize (fftSize);
+            cascadeRresSave.resize (fftSize);
+            cascadeFftSize = fftSize;
+        }
+
+        // Full cascade using pre-allocated buffers
+        doCascade (fftL, fftR, cascadeCenter.data(), cascadeFrontL.data(),
+                   cascadeFrontR.data(), cascadeWideL.data(), cascadeWideR.data(),
+                   cascadeSideL.data(), cascadeSideR.data(),
+                   cascadeRearL.data(), cascadeRearR.data(),
+                   cascadeTemp.data(), fftSize, numSpecOut);
+
+        // Stretch
+        float stretch = apvts.getRawParameterValue ("stretch")->load();
+        applyStretch (cascadeCenter.data(), cascadeFrontL.data(), cascadeFrontR.data(),
+                      cascadeWideL.data(), cascadeWideR.data(),
+                      cascadeSideL.data(), cascadeSideR.data(),
+                      cascadeRearL.data(), cascadeRearR.data(),
+                      fftSize, stretch, numSpecOut);
+
+        // Crosstalk
+        {
+            float crosstalkVal = apvts.getRawParameterValue ("crosstalk")->load();
+            applyCrosstalk (cascadeCenter.data(), cascadeFrontL.data(), cascadeFrontR.data(),
+                            cascadeWideL.data(), cascadeWideR.data(),
+                            cascadeSideL.data(), cascadeSideR.data(),
+                            cascadeRearL.data(), cascadeRearR.data(),
+                            fftSize, numSpecOut, crosstalkVal);
+        }
+
+        // ---- Phase coherence restoration ----
+        auto restorePhase = [&](float* outBuf, const float* phaseRef)
+        {
+            float magOut = std::abs (outBuf[0]);
+            float magRef = std::abs (phaseRef[0]);
+            if (magRef > 1e-18f)
+            {
+                float scale = magOut / magRef;
+                outBuf[0] = phaseRef[0] * scale;
+            }
+
+            magOut = std::abs (outBuf[1]);
+            magRef = std::abs (phaseRef[1]);
+            if (magRef > 1e-18f)
+            {
+                float scale = magOut / magRef;
+                outBuf[1] = phaseRef[1] * scale;
+            }
+
+            for (int k = 1; k < fftSize / 2; ++k)
+            {
+                size_t idx = static_cast<size_t> (k) * 2;
+                float outRe = outBuf[idx], outIm = outBuf[idx + 1];
+                float refRe = phaseRef[idx], refIm = phaseRef[idx + 1];
+
+                magOut = std::sqrt (outRe * outRe + outIm * outIm);
+                magRef = std::sqrt (refRe * refRe + refIm * refIm);
+
+                if (magRef > 1e-18f)
+                {
+                    float scale = magOut / magRef;
+                    outBuf[idx]     = refRe * scale;
+                    outBuf[idx + 1] = refIm * scale;
+                }
+            }
+        };
+
+        if (numSpecOut > 3)
+        {
+            restorePhase (cascadeFrontL.data(), fftL);
+            restorePhase (cascadeRearL.data(), fftL);
+        }
+        if (numSpecOut > 5)
+            restorePhase (cascadeSideL.data(), fftL);
+        if (numSpecOut > 7)
+            restorePhase (cascadeWideL.data(), fftL);
+
+        if (numSpecOut > 3)
+        {
+            restorePhase (cascadeFrontR.data(), fftR);
+            restorePhase (cascadeRearR.data(), fftR);
+        }
+        if (numSpecOut > 5)
+            restorePhase (cascadeSideR.data(), fftR);
+        if (numSpecOut > 7)
+            restorePhase (cascadeWideR.data(), fftR);
+
+        // --- Per-bin static calibration gain ---
+        if (!gainTable.empty())
+        {
+            float framePeakEnergy = 0.0f;
+            for (int k = 0; k <= fftSize / 2; ++k)
+            {
+                float l2, r2;
+                if (k == 0)
+                {
+                    l2 = static_cast<float> (fftL[0]) * static_cast<float> (fftL[0]);
+                    r2 = static_cast<float> (fftR[0]) * static_cast<float> (fftR[0]);
+                }
+                else if (k == fftSize / 2)
+                {
+                    l2 = static_cast<float> (fftL[1]) * static_cast<float> (fftL[1]);
+                    r2 = static_cast<float> (fftR[1]) * static_cast<float> (fftR[1]);
+                }
+                else
+                {
+                    size_t idx = static_cast<size_t> (k) * 2;
+                    float lRe = fftL[idx], lIm = fftL[idx + 1];
+                    float rRe = fftR[idx], rIm = fftR[idx + 1];
+                    l2 = lRe * lRe + lIm * lIm;
+                    r2 = rRe * rRe + rIm * rIm;
+                }
+                framePeakEnergy = std::max (framePeakEnergy, l2 + r2);
+            }
+
+            for (int k = 0; k <= fftSize / 2; ++k)
+            {
+                float l2, r2;
+                if (k == 0)
+                {
+                    l2 = static_cast<float> (fftL[0]) * static_cast<float> (fftL[0]);
+                    r2 = static_cast<float> (fftR[0]) * static_cast<float> (fftR[0]);
+                }
+                else if (k == fftSize / 2)
+                {
+                    l2 = static_cast<float> (fftL[1]) * static_cast<float> (fftL[1]);
+                    r2 = static_cast<float> (fftR[1]) * static_cast<float> (fftR[1]);
+                }
+                else
+                {
+                    size_t idx = static_cast<size_t> (k) * 2;
+                    float lRe = fftL[idx], lIm = fftL[idx + 1];
+                    float rRe = fftR[idx], rIm = fftR[idx + 1];
+                    l2 = lRe * lRe + lIm * lIm;
+                    r2 = rRe * rRe + rIm * rIm;
+                }
+
+                float energy = l2 + r2;
+                float snr = energy / (framePeakEnergy + 1e-18f);
+                float confidence = std::min (1.0f, snr * 1e6f);
+
+                float rawGain = 1.0f;
+                if (energy > 1e-18f)
+                {
+                    float ildDb;
+                    if (l2 < 1e-18f && r2 < 1e-18f)
+                        ildDb = 0.0f;
+                    else if (l2 < 1e-18f)
+                        ildDb = -60.0f;
+                    else if (r2 < 1e-18f)
+                        ildDb = 60.0f;
+                    else
+                        ildDb = 10.0f * std::log10 (l2 / r2);
+
+                    ildDb = std::max (-60.0f, std::min (60.0f, ildDb));
+
+                    float idxF = (ildDb + 60.0f) * 10.0f;
+                    int idxLow  = static_cast<int> (std::floor (idxF));
+                    int idxHigh = idxLow + 1;
+                    float frac  = idxF - static_cast<float> (idxLow);
+
+                    idxLow  = std::max (0, std::min (ildTableSize - 1, idxLow));
+                    idxHigh = std::max (0, std::min (ildTableSize - 1, idxHigh));
+
+                    rawGain = gainTable[static_cast<size_t> (idxLow)] * (1.0f - frac)
+                            + gainTable[static_cast<size_t> (idxHigh)] * frac;
+                }
+
+                binCalGains[static_cast<size_t> (k)] = 1.0f + (rawGain - 1.0f) * confidence;
+            }
+
+            if (fftSize >= 4)
+            {
+                binCalGainsSmoothed[0] = binCalGains[0];
+                binCalGainsSmoothed[static_cast<size_t> (fftSize / 2)] = binCalGains[static_cast<size_t> (fftSize / 2)];
+                for (int k = 1; k < fftSize / 2; ++k)
+                {
+                    size_t uk = static_cast<size_t> (k);
+                    binCalGainsSmoothed[uk] = 0.25f * binCalGains[uk - 1] + 0.5f * binCalGains[uk] + 0.25f * binCalGains[uk + 1];
+                }
+                binCalGains.swap (binCalGainsSmoothed);
+            }
+
+            auto applyBinGain = [&](float* buf, int size)
+            {
+                buf[0] *= binCalGains[0];
+                if (size > 2)
+                    buf[1] *= binCalGains[static_cast<size_t> (size / 2)];
+                for (int k = 1; k < size / 2; ++k)
+                {
+                    size_t idx = static_cast<size_t> (k) * 2;
+                    float g = binCalGains[static_cast<size_t> (k)];
+                    buf[idx] *= g;
+                    buf[idx + 1] *= g;
+                }
+            };
+
+            applyBinGain (cascadeCenter.data(), fftSize);
+            applyBinGain (cascadeFrontL.data(), fftSize);
+            applyBinGain (cascadeFrontR.data(), fftSize);
+            if (numSpecOut > 7)
+            {
+                applyBinGain (cascadeWideL.data(), fftSize);
+                applyBinGain (cascadeWideR.data(), fftSize);
+            }
+            if (numSpecOut > 5)
+            {
+                applyBinGain (cascadeSideL.data(), fftSize);
+                applyBinGain (cascadeSideR.data(), fftSize);
+            }
+            applyBinGain (cascadeRearL.data(), fftSize);
+            applyBinGain (cascadeRearR.data(), fftSize);
+        }
+
+        // Channel Offsets
+        {
+            float* bufMap[9] = {};
+            int chOffIdx[9] = {};
+            if (numSpecOut <= 3)
+            {
+                bufMap[0] = cascadeCenter.data(); bufMap[1] = cascadeFrontL.data(); bufMap[2] = cascadeFrontR.data();
+                chOffIdx[0] = 0; chOffIdx[1] = 1; chOffIdx[2] = 2;
+            }
+            else if (numSpecOut <= 5)
+            {
+                bufMap[0] = cascadeCenter.data(); bufMap[1] = cascadeFrontL.data(); bufMap[2] = cascadeFrontR.data();
+                bufMap[3] = cascadeRearL.data();  bufMap[4] = cascadeRearR.data();
+                chOffIdx[0] = 0; chOffIdx[1] = 1; chOffIdx[2] = 2;
+                chOffIdx[3] = 7; chOffIdx[4] = 8;
+            }
+            else if (numSpecOut <= 7)
+            {
+                bufMap[0] = cascadeCenter.data(); bufMap[1] = cascadeFrontL.data(); bufMap[2] = cascadeFrontR.data();
+                bufMap[3] = cascadeSideL.data();  bufMap[4] = cascadeSideR.data();
+                bufMap[5] = cascadeRearL.data();  bufMap[6] = cascadeRearR.data();
+                chOffIdx[0] = 0; chOffIdx[1] = 1; chOffIdx[2] = 2;
+                chOffIdx[3] = 5; chOffIdx[4] = 6;
+                chOffIdx[5] = 7; chOffIdx[6] = 8;
+            }
+            else
+            {
+                bufMap[0] = cascadeCenter.data(); bufMap[1] = cascadeFrontL.data(); bufMap[2] = cascadeFrontR.data();
+                bufMap[3] = cascadeWideL.data();  bufMap[4] = cascadeWideR.data();
+                bufMap[5] = cascadeSideL.data();  bufMap[6] = cascadeSideR.data();
+                bufMap[7] = cascadeRearL.data();  bufMap[8] = cascadeRearR.data();
+                chOffIdx[0] = 0; chOffIdx[1] = 1; chOffIdx[2] = 2;
+                chOffIdx[3] = 3; chOffIdx[4] = 4;
+                chOffIdx[5] = 5; chOffIdx[6] = 6;
+                chOffIdx[7] = 7; chOffIdx[8] = 8;
+            }
+            for (int ch = 0; ch < numSpecOut; ++ch)
+            {
+                float offsetDb = chOffParams[chOffIdx[ch]]->load();
+                if (std::abs (offsetDb) >= 0.01f)
+                {
+                    float gain = juce::Decibels::decibelsToGain (offsetDb);
+                    juce::FloatVectorOperations::multiply (bufMap[ch], gain, fftSize);
+                }
+            }
+        }
+
+        // Write to output buffers
+        if (numSpecOut <= 3)
+        {
+            std::copy (cascadeCenter.begin(), cascadeCenter.end(), fftOutputs[0]);
+            std::copy (cascadeFrontL.begin(), cascadeFrontL.end(), fftOutputs[1]);
+            std::copy (cascadeFrontR.begin(), cascadeFrontR.end(), fftOutputs[2]);
+        }
+        else if (numSpecOut <= 5)
+        {
+            std::copy (cascadeCenter.begin(), cascadeCenter.end(), fftOutputs[0]);
+            std::copy (cascadeFrontL.begin(), cascadeFrontL.end(), fftOutputs[1]);
+            std::copy (cascadeFrontR.begin(), cascadeFrontR.end(), fftOutputs[2]);
+            std::copy (cascadeRearL.begin(), cascadeRearL.end(), fftOutputs[3]);
+            std::copy (cascadeRearR.begin(), cascadeRearR.end(), fftOutputs[4]);
+        }
+        else if (numSpecOut <= 7)
+        {
+            std::copy (cascadeCenter.begin(), cascadeCenter.end(), fftOutputs[0]);
+            std::copy (cascadeFrontL.begin(), cascadeFrontL.end(), fftOutputs[1]);
+            std::copy (cascadeFrontR.begin(), cascadeFrontR.end(), fftOutputs[2]);
+            std::copy (cascadeSideL.begin(), cascadeSideL.end(), fftOutputs[3]);
+            std::copy (cascadeSideR.begin(), cascadeSideR.end(), fftOutputs[4]);
+            std::copy (cascadeRearL.begin(), cascadeRearL.end(), fftOutputs[5]);
+            std::copy (cascadeRearR.begin(), cascadeRearR.end(), fftOutputs[6]);
+        }
+        else
+        {
+            std::copy (cascadeCenter.begin(), cascadeCenter.end(), fftOutputs[0]);
+            std::copy (cascadeFrontL.begin(), cascadeFrontL.end(), fftOutputs[1]);
+            std::copy (cascadeFrontR.begin(), cascadeFrontR.end(), fftOutputs[2]);
+            std::copy (cascadeWideL.begin(), cascadeWideL.end(), fftOutputs[3]);
+            std::copy (cascadeWideR.begin(), cascadeWideR.end(), fftOutputs[4]);
+            std::copy (cascadeSideL.begin(), cascadeSideL.end(), fftOutputs[5]);
+            std::copy (cascadeSideR.begin(), cascadeSideR.end(), fftOutputs[6]);
+            std::copy (cascadeRearL.begin(), cascadeRearL.end(), fftOutputs[7]);
+            std::copy (cascadeRearR.begin(), cascadeRearR.end(), fftOutputs[8]);
+        }
+        return;
+    }
+
+    // ---- Multi-input path (5.1 / 7.1) ----
     // Ensure cascade buffers are sized
     if (cascadeFftSize != fftSize)
     {
@@ -1232,10 +1715,177 @@ void SpatialExpanderAudioProcessor::onFrame (const float* fftL, const float* fft
         cascadeRearL.resize (fftSize);
         cascadeRearR.resize (fftSize);
         cascadeTemp.resize (fftSize);
+        cascadeLresSave.resize (fftSize);
+        cascadeRresSave.resize (fftSize);
+        fftBC.assign (fftSize, 0.0f);
+        fftSLp.assign (fftSize, 0.0f);
+        fftSRp.assign (fftSize, 0.0f);
+        fftRLp.assign (fftSize, 0.0f);
+        fftRRp.assign (fftSize, 0.0f);
+        fftL_syn.assign (fftSize, 0.0f);
+        fftR_syn.assign (fftSize, 0.0f);
         cascadeFftSize = fftSize;
     }
 
-    // Full cascade using pre-allocated buffers
+    // Step 1: Map input channels by canonical index from processBlock
+    // Canonical order: [0]=L, [1]=R, [2]=C, [3]=surroundL, [4]=surroundR
+    // For In71: [3]=SideL, [4]=SideR, [5]=RearL, [6]=RearR
+    const float* fftFL   = (numInputs > 0) ? fftInputs[0] : nullptr;
+    const float* fftFR   = (numInputs > 1) ? fftInputs[1] : nullptr;
+    const float* fftC    = (numInputs > 2) ? fftInputs[2] : nullptr;
+    const float* fftSL   = (numInputs > 3 && inputFmt == InputFormat::In51) ? fftInputs[3] : nullptr;
+    const float* fftSR   = (numInputs > 4 && inputFmt == InputFormat::In51) ? fftInputs[4] : nullptr;
+    const float* fftSideL = (numInputs > 3 && inputFmt == InputFormat::In71) ? fftInputs[3] : nullptr;
+    const float* fftSideR = (numInputs > 4 && inputFmt == InputFormat::In71) ? fftInputs[4] : nullptr;
+    const float* fftRL   = (numInputs > 5 && inputFmt == InputFormat::In71) ? fftInputs[5] : nullptr;
+    const float* fftRR   = (numInputs > 6 && inputFmt == InputFormat::In71) ? fftInputs[6] : nullptr;
+
+    // Step 2: Back-Center extraction
+    // For 5.1: extract BC from surround pair (fftSL/SR). Use SLp/SRp in synthetic stereo.
+    // For 7.1: extract BC from rear pair (fftRL/RR). Use RLp/RRp in synthetic stereo.
+    std::fill (fftBC.begin(), fftBC.end(), 0.0f);
+    bool hasBC = false;
+
+    if (inputFmt == InputFormat::In51 && fftSL != nullptr && fftSR != nullptr)
+    {
+        analyser.onFrame (fftSL, fftSR, fftBC.data(), fftSLp.data(), fftSRp.data(), fftSize);
+        hasBC = true;
+    }
+    else if (inputFmt == InputFormat::In71 && fftRL != nullptr && fftRR != nullptr)
+    {
+        analyser.onFrame (fftRL, fftRR, fftBC.data(), fftRLp.data(), fftRRp.data(), fftSize);
+        hasBC = true;
+    }
+
+    // Step 3: Build synthetic stereo mixing matrix
+    // Compute constant-power panning gains for each target ILD
+    auto panGain = [](float ildDb) -> std::pair<float, float>
+    {
+        float r = std::pow (10.0f, ildDb / 20.0f);
+        float denom = 1.0f / std::sqrt (1.0f + r * r);
+        return { r * denom, denom };
+    };
+
+    std::fill (fftL_syn.begin(), fftL_syn.end(), 0.0f);
+    std::fill (fftR_syn.begin(), fftR_syn.end(), 0.0f);
+
+    auto addToSyntheticStereo = [&](const float* src, float gL, float gR)
+    {
+        if (src == nullptr) return;
+        for (int i = 0; i < fftSize; ++i)
+        {
+            fftL_syn[i] += src[i] * gL;
+            fftR_syn[i] += src[i] * gR;
+        }
+    };
+
+    if (inputFmt == InputFormat::In51)
+    {
+        auto [cgL, cgR] = panGain (0.0f);    // Center: 0 dB → 0.707, 0.707
+        addToSyntheticStereo (fftC, cgL, cgR);
+
+        auto [flL, flR] = panGain (6.0f);    // FL: +6 dB → 0.894, 0.447
+        addToSyntheticStereo (fftFL, flL, flR);
+
+        auto [frL, frR] = panGain (-6.0f);   // FR: -6 dB → 0.447, 0.894
+        addToSyntheticStereo (fftFR, frL, frR);
+
+        // Use extracted residuals (SLp/SRp) instead of raw surround pair for synthetic stereo
+        auto [slL, slR] = panGain (20.0f);   // surroundL: +20 dB → 0.995, 0.100
+        addToSyntheticStereo (hasBC ? fftSLp.data() : fftSL, slL, slR);
+
+        auto [srL, srR] = panGain (-20.0f);  // surroundR: -20 dB → 0.100, 0.995
+        addToSyntheticStereo (hasBC ? fftSRp.data() : fftSR, srL, srR);
+    }
+    else if (inputFmt == InputFormat::In71)
+    {
+        auto [cgL, cgR] = panGain (0.0f);
+        addToSyntheticStereo (fftC, cgL, cgR);
+
+        auto [flL, flR] = panGain (6.0f);
+        addToSyntheticStereo (fftFL, flL, flR);
+
+        auto [frL, frR] = panGain (-6.0f);
+        addToSyntheticStereo (fftFR, frL, frR);
+
+        auto [slL, slR] = panGain (9.5f);    // SideL: +9.5 dB → 0.949, 0.317
+        addToSyntheticStereo (fftSideL, slL, slR);
+
+        auto [srL, srR] = panGain (-9.5f);   // SideR: -9.5 dB → 0.317, 0.949
+        addToSyntheticStereo (fftSideR, srL, srR);
+
+        // Use extracted residuals (RLp/RRp) for rear channels
+        auto [rlL, rlR] = panGain (20.0f);   // RearL: +20 dB → 0.995, 0.100
+        addToSyntheticStereo (hasBC ? fftRLp.data() : fftRL, rlL, rlR);
+
+        auto [rrL, rrR] = panGain (-20.0f);  // RearR: -20 dB → 0.100, 0.995
+        addToSyntheticStereo (hasBC ? fftRRp.data() : fftRR, rrL, rrR);
+    }
+
+    // Energy-preserving rescaling: prevent constructive-interference inflation
+    // OrigEnergy must only count channels that feed into the synthetic stereo,
+    // NOT raw surround channels whose energy is split between BC (bypasses
+    // synthetic stereo) and residuals (goes into synthetic stereo).
+    {
+        auto addEnergy = [&](const float* buf)
+        {
+            if (buf == nullptr) return 0.0f;
+            float e = buf[0] * buf[0];
+            if (fftSize > 2)
+                e += buf[1] * buf[1];
+            for (int k = 1; k < fftSize / 2; ++k)
+            {
+                size_t idx = static_cast<size_t> (k) * 2;
+                float re = buf[idx], im = buf[idx + 1];
+                e += re * re + im * im;
+            }
+            return e;
+        };
+
+        float origEnergy = 0.0f;
+        origEnergy += addEnergy (fftC);
+        origEnergy += addEnergy (fftFL);
+        origEnergy += addEnergy (fftFR);
+        if (inputFmt == InputFormat::In51)
+        {
+            origEnergy += addEnergy (hasBC ? fftSLp.data() : fftSL);
+            origEnergy += addEnergy (hasBC ? fftSRp.data() : fftSR);
+        }
+        else // In71
+        {
+            origEnergy += addEnergy (fftSideL);
+            origEnergy += addEnergy (fftSideR);
+            origEnergy += addEnergy (hasBC ? fftRLp.data() : fftRL);
+            origEnergy += addEnergy (hasBC ? fftRRp.data() : fftRR);
+        }
+
+        float synEnergy = 0.0f;
+        synEnergy += fftL_syn[0] * fftL_syn[0] + fftR_syn[0] * fftR_syn[0];
+        if (fftSize > 2)
+            synEnergy += fftL_syn[1] * fftL_syn[1] + fftR_syn[1] * fftR_syn[1];
+        for (int k = 1; k < fftSize / 2; ++k)
+        {
+            size_t idx = static_cast<size_t> (k) * 2;
+            float lRe = fftL_syn[idx], lIm = fftL_syn[idx + 1];
+            float rRe = fftR_syn[idx], rIm = fftR_syn[idx + 1];
+            synEnergy += lRe * lRe + lIm * lIm + rRe * rRe + rIm * rIm;
+        }
+
+        float energyScale = 1.0f;
+        if (synEnergy > 1e-18f && origEnergy > 1e-18f)
+            energyScale = std::sqrt (origEnergy / synEnergy);
+
+        for (int i = 0; i < fftSize; ++i)
+        {
+            fftL_syn[i] *= energyScale;
+            fftR_syn[i] *= energyScale;
+        }
+    }
+
+    // Step 4: Run the existing cascade on synthetic stereo
+    const float* fftL = fftL_syn.data();
+    const float* fftR = fftR_syn.data();
+
     doCascade (fftL, fftR, cascadeCenter.data(), cascadeFrontL.data(),
                cascadeFrontR.data(), cascadeWideL.data(), cascadeWideR.data(),
                cascadeSideL.data(), cascadeSideR.data(),
@@ -1250,7 +1900,7 @@ void SpatialExpanderAudioProcessor::onFrame (const float* fftL, const float* fft
                   cascadeRearL.data(), cascadeRearR.data(),
                   fftSize, stretch, numSpecOut);
 
-    // Crosstalk (now in frequency domain so calibration sees it)
+    // Crosstalk
     {
         float crosstalkVal = apvts.getRawParameterValue ("crosstalk")->load();
         applyCrosstalk (cascadeCenter.data(), cascadeFrontL.data(), cascadeFrontR.data(),
@@ -1261,8 +1911,6 @@ void SpatialExpanderAudioProcessor::onFrame (const float* fftL, const float* fft
     }
 
     // ---- Phase coherence restoration (post-cascade, pre-gain) ----
-    // L-derived channels inherit L's original phase; R-derived inherit R's.
-    // Magnitudes are untouched, so spatial mapping stays exact.
     auto restorePhase = [&](float* outBuf, const float* phaseRef)
     {
         float magOut = std::abs (outBuf[0]);
@@ -1299,7 +1947,7 @@ void SpatialExpanderAudioProcessor::onFrame (const float* fftL, const float* fft
         }
     };
 
-    // L-derived channels
+    // L-derived channels use synthetic L phase; R-derived use synthetic R phase
     if (numSpecOut > 3)
     {
         restorePhase (cascadeFrontL.data(), fftL);
@@ -1310,7 +1958,6 @@ void SpatialExpanderAudioProcessor::onFrame (const float* fftL, const float* fft
     if (numSpecOut > 7)
         restorePhase (cascadeWideL.data(), fftL);
 
-    // R-derived channels
     if (numSpecOut > 3)
     {
         restorePhase (cascadeFrontR.data(), fftR);
@@ -1321,14 +1968,9 @@ void SpatialExpanderAudioProcessor::onFrame (const float* fftL, const float* fft
     if (numSpecOut > 7)
         restorePhase (cascadeWideR.data(), fftR);
 
-    // Center is left as-is (already extracted with coherent L+R phase)
-
     // --- Per-bin static calibration gain ---
-    // No temporal smoothing across frames; the STFT's 32x overlap provides ~10 ms
-    // effective smoothing via the synthesis window.
     if (!gainTable.empty())
     {
-        // Step 1: Compute frame peak energy for noise gate
         float framePeakEnergy = 0.0f;
         for (int k = 0; k <= fftSize / 2; ++k)
         {
@@ -1354,7 +1996,6 @@ void SpatialExpanderAudioProcessor::onFrame (const float* fftL, const float* fft
             framePeakEnergy = std::max (framePeakEnergy, l2 + r2);
         }
 
-        // Step 2: Compute per-bin gain
         for (int k = 0; k <= fftSize / 2; ++k)
         {
             float l2, r2;
@@ -1396,8 +2037,7 @@ void SpatialExpanderAudioProcessor::onFrame (const float* fftL, const float* fft
 
                 ildDb = std::max (-60.0f, std::min (60.0f, ildDb));
 
-                // Linear interpolation with 0.1 dB step resolution
-                float idxF = (ildDb + 60.0f) * 10.0f;   // 1 / 0.1 = 10
+                float idxF = (ildDb + 60.0f) * 10.0f;
                 int idxLow  = static_cast<int> (std::floor (idxF));
                 int idxHigh = idxLow + 1;
                 float frac  = idxF - static_cast<float> (idxLow);
@@ -1412,7 +2052,6 @@ void SpatialExpanderAudioProcessor::onFrame (const float* fftL, const float* fft
             binCalGains[static_cast<size_t> (k)] = 1.0f + (rawGain - 1.0f) * confidence;
         }
 
-        // Step 3: Optional 3-bin Gaussian spectral smoothing
         if (fftSize >= 4)
         {
             binCalGainsSmoothed[0] = binCalGains[0];
@@ -1425,7 +2064,6 @@ void SpatialExpanderAudioProcessor::onFrame (const float* fftL, const float* fft
             binCalGains.swap (binCalGainsSmoothed);
         }
 
-        // Step 4: Apply per-bin gain to all channels
         auto applyBinGain = [&](float* buf, int size)
         {
             buf[0] *= binCalGains[0];
@@ -1457,9 +2095,42 @@ void SpatialExpanderAudioProcessor::onFrame (const float* fftL, const float* fft
         applyBinGain (cascadeRearR.data(), fftSize);
     }
 
-    // Channel Offsets (post-calibration per-channel gain)
-    // chOffParams index order: C=0, FL=1, FR=2, WL=3, WR=4, SL=5, SR=6, RL=7, RR=8
-    // Spectral output order differs per format, so we need a remapping.
+    // BC reinjection (after calibration — BC was never in the cascade)
+    if (hasBC)
+    {
+        float bcCompensate = 1.0f;
+        {
+            float crosstalkVal = apvts.getRawParameterValue ("crosstalk")->load();
+            if (crosstalkVal > 0.0f)
+            {
+                float rearEnergy = 0.0f;
+                for (int i = 0; i < fftSize; ++i)
+                    rearEnergy += cascadeRearL[i] * cascadeRearL[i] + cascadeRearR[i] * cascadeRearR[i];
+
+                float bcEnergy = 0.0f;
+                for (int i = 0; i < fftSize; ++i)
+                    bcEnergy += fftBC[i] * fftBC[i];
+
+                if (rearEnergy > 1e-12f)
+                {
+                    float d1 = std::sqrt (1.0f + crosstalkVal);
+                    float ratio = rearEnergy / (rearEnergy + bcEnergy * 2.0f);
+                    bcCompensate = 1.0f + (d1 - 1.0f) * ratio;
+                }
+            }
+        }
+
+        if (numSpecOut > 3)
+        {
+            for (int i = 0; i < fftSize; ++i)
+            {
+                cascadeRearL[i] += fftBC[i] * bcCompensate;
+                cascadeRearR[i] += fftBC[i] * bcCompensate;
+            }
+        }
+    }
+
+    // Channel Offsets
     {
         float* bufMap[9] = {};
         int chOffIdx[9] = {};
@@ -1507,11 +2178,6 @@ void SpatialExpanderAudioProcessor::onFrame (const float* fftL, const float* fft
     }
 
     // Write to output buffers
-    // 3.0: outputs[0]=Center, [1]=Lres, [2]=Rres
-    // 5.1: outputs[0]=Center, [1]=FrontL, [2]=FrontR, [3]=RearL, [4]=RearR
-    // 7.1: outputs[0]=Center, [1]=FrontL, [2]=FrontR, [3]=SideL, [4]=SideR, [5]=RearL, [6]=RearR
-    // 9.1: outputs[0]=Center, [1]=FrontL, [2]=FrontR, [3]=WideL, [4]=WideR,
-    //       [5]=SideL, [6]=SideR, [7]=RearL, [8]=RearR
     if (numSpecOut <= 3)
     {
         std::copy (cascadeCenter.begin(), cascadeCenter.end(), fftOutputs[0]);
@@ -1758,7 +2424,8 @@ juce::String SpatialExpanderAudioProcessor::getInputWarningText() const
         return {};
 
     auto inLayout = input->getCurrentLayout();
-    if (inLayout.size() <= 2)
+    auto inFmt = detectInputFormatFromBus();
+    if (inLayout.size() <= 2 || inFmt != InputFormat::Stereo)
         return {};
 
     auto output = getBus (false, 0);

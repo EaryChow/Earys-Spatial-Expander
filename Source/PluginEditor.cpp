@@ -44,6 +44,16 @@ SpatialExpanderAudioProcessorEditor::SpatialExpanderAudioProcessorEditor (
         return text.getDoubleValue();
     };
 
+    inFormatLabel.setText ("Input Format", juce::dontSendNotification);
+    inFormatLabel.setJustificationType (juce::Justification::centred);
+    addAndMakeVisible (inFormatLabel);
+
+    inFormatComboBox.addItemList ({ "Stereo", "5.1", "7.1" }, 1);
+    inFormatComboBox.setSelectedId (1);
+    addAndMakeVisible (inFormatComboBox);
+    inFormatAttach = std::make_unique<juce::AudioProcessorValueTreeState::ComboBoxAttachment>(
+        processor.getAPVTS(), "inputFormat", inFormatComboBox);
+
     formatLabel.setText ("Output Format", juce::dontSendNotification);
     formatLabel.setJustificationType (juce::Justification::centred);
     addAndMakeVisible (formatLabel);
@@ -277,6 +287,10 @@ void SpatialExpanderAudioProcessorEditor::resized()
     sl = area.removeFromTop (50);
     preampLabel.setBounds (sl.removeFromLeft (100));
     preampSlider.setBounds (sl.reduced (5));
+
+    auto inFmtArea = area.removeFromTop (45);
+    inFormatLabel.setBounds (inFmtArea.removeFromTop (20));
+    inFormatComboBox.setBounds (inFmtArea.reduced (60, 0));
 
     auto fmtArea = area.removeFromTop (45);
     formatLabel.setBounds (fmtArea.removeFromTop (20));
