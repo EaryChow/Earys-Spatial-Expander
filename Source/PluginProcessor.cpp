@@ -169,10 +169,25 @@ SpatialExpanderAudioProcessor::InputFormat SpatialExpanderAudioProcessor::detect
     return static_cast<InputFormat> (idx);  // 0=Stereo, 1=5.1, 2=7.1
 }
 
+int SpatialExpanderAudioProcessor::getMinOutputFormat() const noexcept
+{
+    auto inFmt = detectInputFormatFromBus();
+    switch (inFmt)
+    {
+        case InputFormat::In51: return Fmt71;
+        case InputFormat::In71: return Fmt916;
+        default:                return Fmt30;
+    }
+}
+
 int SpatialExpanderAudioProcessor::getNumSpectralOutputs() const noexcept
 {
     int fmt = static_cast<int> (apvts.getRawParameterValue ("outputFormat")->load());
     int effective = (fmt == Auto) ? detectFormatFromBus() : fmt;
+
+    int minOut = getMinOutputFormat();
+    if (effective < minOut)
+        effective = minOut;
 
     switch (effective)
     {

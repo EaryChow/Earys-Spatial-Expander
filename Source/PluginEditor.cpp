@@ -389,19 +389,35 @@ void SpatialExpanderAudioProcessorEditor::timerCallback()
 void SpatialExpanderAudioProcessorEditor::updateFormatComboBox()
 {
     auto busName = processor.getCurrentBusFormatName();
+    int minOut = processor.getMinOutputFormat();
+    static constexpr const char* fmtNames[] = { "Auto", "3.0", "5.1", "7.1", "9.1" };
+    static constexpr int numFmts = 5;
 
     if (formatComboBox.getNumItems() == 0 ||
-        ! formatComboBox.getItemText (0).contains (busName))
+        ! formatComboBox.getItemText (0).contains (busName) ||
+        lastMinOut != minOut)
     {
         auto currentId = formatComboBox.getSelectedId();
 
+        // If the current parameter selects a format below minimum, reset to minOut
+        auto& apvts = processor.getAPVTS();
+        int currentParam = static_cast<int> (apvts.getRawParameterValue ("outputFormat")->load());
+        if (currentParam != 0 && currentParam < minOut)
+        {
+            apvts.getParameter ("outputFormat")->setValueNotifyingHost (
+                static_cast<float> (minOut) / static_cast<float> (numFmts - 1));
+            currentId = minOut + 1;
+        }
+
         formatComboBox.clear (juce::dontSendNotification);
-        formatComboBox.addItem ("Auto (" + busName + ")", 1);
-        formatComboBox.addItem ("3.0", 2);
-        formatComboBox.addItem ("5.1", 3);
-        formatComboBox.addItem ("7.1", 4);
-        formatComboBox.addItem ("9.1", 5);
+        for (int i = 0; i < numFmts; ++i)
+        {
+            if (i > 0 && i < minOut) continue;  // skip formats below minimum
+            juce::String label = (i == 0) ? "Auto (" + busName + ")" : fmtNames[i];
+            formatComboBox.addItem (label, i + 1);
+        }
         formatComboBox.setSelectedId (currentId, juce::dontSendNotification);
+        lastMinOut = minOut;
     }
 }
 

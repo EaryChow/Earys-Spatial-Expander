@@ -82,6 +82,7 @@ private:
     juce::Label warningLabel;
 
     int lastDetectedFormat = -1;
+    int lastMinOut = -1;
     // int lastDisplayedLatency = -999;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (SpatialExpanderAudioProcessorEditor)

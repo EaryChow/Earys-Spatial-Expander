@@ -50,6 +50,7 @@ public:
     void endRecalibrationGesture();
 
     int getNumSpectralOutputs() const noexcept;
+    int getMinOutputFormat() const noexcept;
 
     std::atomic<bool> pendingLatencyMeasurement { false };
     std::atomic<int> measuredLatencySamples { -1 };
