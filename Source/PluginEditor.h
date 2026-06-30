@@ -79,6 +79,7 @@ private:
     // juce::TextButton measureButton;
     // juce::Label latencyResultLabel;
 
+    juce::Label loudnessLabel;
     juce::Label warningLabel;
 
     int lastDetectedFormat = -1;

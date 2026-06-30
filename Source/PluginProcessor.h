@@ -5,6 +5,7 @@
 #include "DSP/LFEExtractor.h"
 #include "DSP/SurroundSTFT.h"
 #include "DSP/SpatialAnalyser.h"
+#include "DSP/LoudnessMeter.h"
 
 class SpatialExpanderAudioProcessor : public juce::AudioProcessor,
                                        private SurroundSTFT::FrameListener,
@@ -54,6 +55,8 @@ public:
 
     std::atomic<bool> pendingLatencyMeasurement { false };
     std::atomic<int> measuredLatencySamples { -1 };
+
+    double getLoudness() const { return loudnessMeter.getMomentaryLoudness(); }
 
     enum OutputFormat { Auto = 0, Fmt30, Fmt51, Fmt71, Fmt916 };
     enum AuxBusIdx { AuxFront = 1, AuxCenter, AuxLFE, AuxWide, AuxSide, AuxRear };
@@ -109,6 +112,7 @@ private:
     SurroundSTFT stft;
     SpatialAnalyser analyser;
     LFEExtractor lfe;
+    LoudnessMeter loudnessMeter;
 
     std::vector<std::vector<float>> chOutputs;
     std::vector<float*> chOutputPtrs;

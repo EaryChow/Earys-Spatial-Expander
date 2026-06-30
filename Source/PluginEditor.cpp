@@ -157,6 +157,12 @@ SpatialExpanderAudioProcessorEditor::SpatialExpanderAudioProcessorEditor (
     // latencyResultLabel.setJustificationType (juce::Justification::centred);
     // addAndMakeVisible (latencyResultLabel);
 
+    loudnessLabel.setFont (juce::Font (juce::FontOptions (14.0f, juce::Font::bold)));
+    loudnessLabel.setColour (juce::Label::textColourId, juce::Colours::lime);
+    loudnessLabel.setJustificationType (juce::Justification::centred);
+    loudnessLabel.setText ("Integrated: --", juce::dontSendNotification);
+    addAndMakeVisible (loudnessLabel);
+
     warningLabel.setFont (juce::Font (juce::FontOptions (12.0f)));
     warningLabel.setColour (juce::Label::textColourId, juce::Colours::orange);
     warningLabel.setJustificationType (juce::Justification::centred);
@@ -325,6 +331,9 @@ void SpatialExpanderAudioProcessorEditor::resized()
         }
     }
 
+    auto loudArea = area.removeFromTop (24);
+    loudnessLabel.setBounds (loudArea.reduced (10, 0));
+
     warningLabel.setBounds (area.reduced (10, 0));
 }
 
@@ -345,6 +354,15 @@ void SpatialExpanderAudioProcessorEditor::timerCallback()
             warningLabel.setText (formatWarn, juce::dontSendNotification);
         else
             warningLabel.setText ({}, juce::dontSendNotification);
+    }
+
+    {
+        double loudness = processor.getLoudness();
+        if (loudness < -60.0)
+    loudnessLabel.setText ("Momentary: --", juce::dontSendNotification);
+        else
+            loudnessLabel.setText ("Momentary: " + juce::String (loudness, 1) + " LUFS",
+                                   juce::dontSendNotification);
     }
 
     // Disable Stretch control in 3.1 mode

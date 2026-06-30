@@ -269,6 +269,9 @@ void SpatialExpanderAudioProcessor::prepareToPlay (double sampleRate, int sample
     binCalGainsSmoothed.resize (cs / 2 + 1, 1.0f);
 
     runCalibration();
+
+    int maxCh = std::max (getMainBusNumOutputChannels(), 10);
+    loudnessMeter.prepare (sampleRate, maxCh);
 }
 
 void SpatialExpanderAudioProcessor::releaseResources()
@@ -859,6 +862,8 @@ void SpatialExpanderAudioProcessor::processBlock (juce::AudioBuffer<float>& buff
                 break;
         }
     }
+
+    loudnessMeter.process (buffer, outputLayout, numSpecOut);
 
     // Fade-out
     if (state == CalState::FadingOut)
