@@ -145,7 +145,36 @@ double LoudnessMeter::getChannelWeight (juce::AudioChannelSet::ChannelType type,
     // Fairlight (and some other DAWs) use Lc/Rc for the ±60° wide pair in 9.1+ beds.
     // In small layouts (≤ 5.1) Lc/Rc might genuinely be front-half (~15°), so keep 1.0.
     if (type == CT::leftCentre || type == CT::rightCentre)
-        return (layout.size() >= 10) ? 1.41 : 1.0;
+    {
+        // If the DAW has explicit wide channels, Lc/Rc are genuinely front-half (e.g. ~15°)
+        bool hasExplicitWide = false;
+        for (int ch = 0; ch < layout.size(); ++ch)
+        {
+            auto t = layout.getTypeOfChannel (ch);
+            if (t == CT::wideLeft || t == CT::wideRight)
+            {
+                hasExplicitWide = true;
+                break;
+            }
+        }
+        if (hasExplicitWide)
+            return 1.0;
+
+        // Fairlight fingerprint: Lc/Rc appear AFTER Ls/Rs in a large bed
+        int lcIndex = -1, lsIndex = -1;
+        for (int ch = 0; ch < layout.size(); ++ch)
+        {
+            auto t = layout.getTypeOfChannel (ch);
+            if (lcIndex < 0 && (t == CT::leftCentre || t == CT::rightCentre))
+                lcIndex = ch;
+            if (lsIndex < 0 && (t == CT::leftSurround || t == CT::leftSurroundSide))
+                lsIndex = ch;
+        }
+        if (lcIndex > lsIndex && lsIndex >= 0 && layout.size() >= 10)
+            return 1.41;   // Fairlight convention: Lc/Rc are the ±60° wide pair
+
+        return 1.0;        // Default: front-half speaker
+    }
 
     // Ambiguous: leftSurround / rightSurround
     // This type is a catch-all. Disambiguate by looking at what OTHER specific types
