@@ -417,6 +417,12 @@ void SpatialExpanderAudioProcessor::processBlock (juce::AudioBuffer<float>& buff
     if (state == CalState::Reconfiguring)
     {
         mainOutBuf.clear();
+        for (int busIdx = 1; busIdx < getBusCount(false); ++busIdx)
+        {
+            auto* bus = getBus(false, busIdx);
+            if (bus == nullptr || !bus->isEnabled()) continue;
+            getBusBuffer(buffer, false, busIdx).clear();
+        }
         return;
     }
 
@@ -857,16 +863,30 @@ void SpatialExpanderAudioProcessor::processBlock (juce::AudioBuffer<float>& buff
     {
         int left = fadeSamplesLeft.load();
         int n = std::min (left, numSamples);
+
+        std::vector<float*> fadePtrs;
+        fadePtrs.reserve(mainOutCh + 8);
+        for (int c = 0; c < mainOutCh; ++c)
+            fadePtrs.push_back(mainOutBuf.getWritePointer(c));
+        for (int busIdx = 1; busIdx < getBusCount(false); ++busIdx)
+        {
+            auto* bus = getBus(false, busIdx);
+            if (bus == nullptr || !bus->isEnabled()) continue;
+            auto buf = getBusBuffer(buffer, false, busIdx);
+            for (int c = 0; c < buf.getNumChannels(); ++c)
+                fadePtrs.push_back(buf.getWritePointer(c));
+        }
+
         for (int i = 0; i < n; ++i)
         {
             float gain = static_cast<float> (left) / static_cast<float> (fadeSamplesTotal);
-            for (int c = 0; c < mainOutBuf.getNumChannels(); ++c)
-                mainOutBuf.getWritePointer (c)[i] *= gain;
+            for (auto* ptr : fadePtrs)
+                ptr[i] *= gain;
             --left;
         }
         for (int i = n; i < numSamples; ++i)
-            for (int c = 0; c < mainOutBuf.getNumChannels(); ++c)
-                mainOutBuf.getWritePointer (c)[i] = 0.0f;
+            for (auto* ptr : fadePtrs)
+                ptr[i] = 0.0f;
         fadeSamplesLeft.store (left);
         if (left <= 0)
         {
@@ -882,11 +902,25 @@ void SpatialExpanderAudioProcessor::processBlock (juce::AudioBuffer<float>& buff
         int left = fadeSamplesLeft.load();
         int n = std::min (left, numSamples);
         int total = fadeSamplesTotal;
+
+        std::vector<float*> fadePtrs;
+        fadePtrs.reserve(mainOutCh + 8);
+        for (int c = 0; c < mainOutCh; ++c)
+            fadePtrs.push_back(mainOutBuf.getWritePointer(c));
+        for (int busIdx = 1; busIdx < getBusCount(false); ++busIdx)
+        {
+            auto* bus = getBus(false, busIdx);
+            if (bus == nullptr || !bus->isEnabled()) continue;
+            auto buf = getBusBuffer(buffer, false, busIdx);
+            for (int c = 0; c < buf.getNumChannels(); ++c)
+                fadePtrs.push_back(buf.getWritePointer(c));
+        }
+
         for (int i = 0; i < n; ++i)
         {
             float gain = 1.0f - static_cast<float> (left - 1) / static_cast<float> (total);
-            for (int c = 0; c < mainOutBuf.getNumChannels(); ++c)
-                mainOutBuf.getWritePointer (c)[i] *= gain;
+            for (auto* ptr : fadePtrs)
+                ptr[i] *= gain;
             --left;
         }
         fadeSamplesLeft.store (left);
