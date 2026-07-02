@@ -142,20 +142,21 @@ SpatialExpanderAudioProcessorEditor::SpatialExpanderAudioProcessorEditor (
     latencyAttach = std::make_unique<juce::AudioProcessorValueTreeState::ComboBoxAttachment>(
         processor.getAPVTS(), "latency", latencyComboBox);
 
-    // measurement UI hidden, logic kept for future use
-    // measureButton.onClick = [this]
-    // {
-    //     processor.pendingLatencyMeasurement.store (true);
-    //     latencyResultLabel.setText ("Measuring\u2026", juce::dontSendNotification);
-    // };
-    // 
-    // measureButton.setButtonText ("Measure Latency");
-    // addAndMakeVisible (measureButton);
-    // 
-    // latencyResultLabel.setFont (juce::Font (juce::FontOptions (12.0f, juce::Font::bold)));
-    // latencyResultLabel.setColour (juce::Label::textColourId, juce::Colours::yellow);
-    // latencyResultLabel.setJustificationType (juce::Justification::centred);
-    // addAndMakeVisible (latencyResultLabel);
+    measureButton.setButtonText ("Measure Latency");
+    measureButton.onClick = [this]
+    {
+        if (processor.isMeasurementActive())
+            return;
+        processor.pendingLatencyMeasurement.store (true);
+        latencyResultLabel.setText ("Measuring...", juce::dontSendNotification);
+        lastDisplayedLatency = -999;
+    };
+    addAndMakeVisible (measureButton);
+
+    latencyResultLabel.setFont (juce::Font (juce::FontOptions (12.0f, juce::Font::bold)));
+    latencyResultLabel.setColour (juce::Label::textColourId, juce::Colours::yellow);
+    latencyResultLabel.setJustificationType (juce::Justification::centred);
+    addAndMakeVisible (latencyResultLabel);
 
     loudnessSectionLabel.setText ("Loudness Meter", juce::dontSendNotification);
     loudnessSectionLabel.setFont (juce::Font (juce::FontOptions (12.0f, juce::Font::bold)));
@@ -240,7 +241,7 @@ SpatialExpanderAudioProcessorEditor::SpatialExpanderAudioProcessorEditor (
         addAndMakeVisible (sld);
     }
 
-    debugToggle.setButtonText ("Show Debug Channel Info");
+    debugToggle.setButtonText ("Show Debug Info");
     debugToggle.setToggleState (false, juce::dontSendNotification);
     addAndMakeVisible (debugToggle);
     debugToggle.onClick = [this] { updateChGainPanel(); };
@@ -293,7 +294,7 @@ void SpatialExpanderAudioProcessorEditor::updateChGainPanel()
         newH = 700 + 24 + static_cast<int> (chGainInfoLabel.getFont().getHeight()) + 6 + extraRows * 34 + 10;
     }
     if (debugToggle.getToggleState())
-        newH += 24 + 80 + 6;
+        newH += 24 + 130 + 6;
     setSize (550, newH);
 }
 
@@ -358,11 +359,6 @@ void SpatialExpanderAudioProcessorEditor::resized()
     latencyLabel.setBounds (latArea.removeFromTop (20));
     latencyComboBox.setBounds (latArea.reduced (60, 0));
 
-    // measurement UI hidden
-    // auto measArea = area.removeFromTop (24);
-    // measureButton.setBounds (measArea.removeFromLeft (120).reduced (2));
-    // latencyResultLabel.setBounds (measArea.reduced (2));
-
     // Per-Channel Gain panel
     area.removeFromTop (16);
     auto advArea = area.removeFromTop (24);
@@ -389,9 +385,14 @@ void SpatialExpanderAudioProcessorEditor::resized()
     }
 
     debugText.setVisible (debugToggle.getToggleState());
+    measureButton.setVisible (debugToggle.getToggleState());
+    latencyResultLabel.setVisible (debugToggle.getToggleState());
     if (debugToggle.getToggleState())
     {
-        auto debugArea = area.removeFromTop (80);
+        auto debugArea = area.removeFromTop (130);
+        auto btnRow = debugArea.removeFromTop (24);
+        measureButton.setBounds (btnRow.removeFromLeft (120).reduced (4, 2));
+        latencyResultLabel.setBounds (btnRow.reduced (4, 2));
         debugText.setBounds (debugArea.reduced (10, 2));
     }
 
@@ -437,7 +438,7 @@ void SpatialExpanderAudioProcessorEditor::timerCallback()
         loudnessReadoutLabel.setText (txt, juce::dontSendNotification);
     }
 
-    debugText.setText (processor.getLoudnessDebugText(), juce::dontSendNotification);
+    debugText.setText (processor.getDebugText(), juce::dontSendNotification);
 
     // Disable Stretch control in 3.1 mode
     int numSpecOut = processor.getNumSpectralOutputs();
@@ -445,30 +446,33 @@ void SpatialExpanderAudioProcessorEditor::timerCallback()
     stretchSlider.setEnabled (enableStretch);
     stretchLabel.setEnabled (enableStretch);
 
-    // measurement UI hidden, logic kept for future use
-    // if (processor.pendingLatencyMeasurement.load())
-    // {
-    //     latencyResultLabel.setText ("Measuring\u2026", juce::dontSendNotification);
-    // }
-    // else
-    // {
-    //     int measured = processor.measuredLatencySamples.load();
-    //     if (measured != lastDisplayedLatency)
-    //     {
-    //         lastDisplayedLatency = measured;
-    //         if (measured >= 0)
-    //         {
-    //             int expected = static_cast<int> (processor.getLatencySamples());
-    //             if (measured == expected)
-    //                 latencyResultLabel.setText ("Latency: " + juce::String (measured) + " samples (OK)",
-    //                                             juce::dontSendNotification);
-    //             else
-    //                 latencyResultLabel.setText ("Latency: " + juce::String (measured)
-    //                                             + " samples (expected " + juce::String (expected) + ")",
-    //                                             juce::dontSendNotification);
-    //         }
-    //     }
-    // }
+    if (processor.pendingLatencyMeasurement.load())
+    {
+        latencyResultLabel.setText ("Measuring...", juce::dontSendNotification);
+    }
+    else
+    {
+        int measured = processor.measuredLatencySamples.load();
+        if (measured != lastDisplayedLatency)
+        {
+            lastDisplayedLatency = measured;
+            if (measured >= 0)
+            {
+                int expected = static_cast<int> (processor.getLatencySamples());
+                if (measured == expected)
+                    latencyResultLabel.setText ("Latency: " + juce::String (measured) + " samples (OK)",
+                                                juce::dontSendNotification);
+                else
+                    latencyResultLabel.setText ("Latency: " + juce::String (measured)
+                                                + " samples (expected " + juce::String (expected) + ")",
+                                                juce::dontSendNotification);
+            }
+            else
+            {
+                latencyResultLabel.setText ("Press to measure", juce::dontSendNotification);
+            }
+        }
+    }
 
     // Refresh gain panel if format changed while open
     if (chGainToggle.getToggleState() && numSpecOut != lastDetectedFormat)
@@ -510,6 +514,9 @@ void SpatialExpanderAudioProcessorEditor::timerCallback()
             chOffLabels[i].setEnabled  (!bypass);
         }
     }
+
+    loudnessPauseButton.setButtonText (processor.isLoudnessPaused() ? "Resume" : "Pause");
+    loudnessPauseButton.setEnabled (!processor.isMeasurementActive());
 }
 
 void SpatialExpanderAudioProcessorEditor::updateFormatComboBox()

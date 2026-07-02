@@ -201,6 +201,16 @@ void SpatialExpanderAudioProcessor::prepareToPlay (double sampleRate, int sample
 {
     fadeSamplesTotal = static_cast<int> (sampleRate * 0.01);
 
+    // Pre-allocate latency measurement buffers (max possible size for any mode)
+    {
+        int maxMeasLen = 32768; // 4096 * 8
+        constexpr int maxCh = 16;
+        measInput.assign (maxMeasLen, 0.0f);
+        measOutput.resize (maxCh);
+        for (auto& v : measOutput)
+            v.assign (maxMeasLen, 0.0f);
+    }
+
     int idx = static_cast<int> (apvts.getRawParameterValue ("latency")->load());
 
     if (isBypassed())
@@ -302,9 +312,39 @@ void SpatialExpanderAudioProcessor::processBlock (juce::AudioBuffer<float>& buff
     int mainInCh    = mainInBuf.getNumChannels();
     int mainOutCh   = mainOutBuf.getNumChannels();
 
+    // ── Latency measurement: inject test signal ──
+    if (measPhase == 1)
+    {
+        int remain = measTotalLen - measTotalPos;
+        int block = std::min (numSamples, remain);
+
+        if (block > 0)
+        {
+            auto* bufL = mainInBuf.getWritePointer (0);
+            auto* bufR = (mainInCh > 1) ? mainInBuf.getWritePointer (1) : mainInBuf.getWritePointer (0);
+            juce::FloatVectorOperations::copy (bufL, measInput.data() + measTotalPos, block);
+            for (int i = block; i < numSamples; ++i) bufL[i] = 0.0f;
+            juce::FloatVectorOperations::copy (bufR, measInput.data() + measTotalPos, block);
+            if (mainInCh > 1)
+                for (int i = block; i < numSamples; ++i) bufR[i] = 0.0f;
+        }
+    }
+
+    // ── Measurement trigger: fade out, then run inside the fade tail ──
+    if (calState.load() == CalState::Normal && measPhase.load() == 0)
+    {
+        if (pendingLatencyMeasurement.exchange (false))
+        {
+            fadeSamplesLeft.store (fadeSamplesTotal);
+            calState.store (CalState::FadingOut);
+        }
+    }
+
     // ── BYPASS PATH ──
     if (isBypassed())
     {
+        auto bypassState = calState.load();
+
         int copyCh = std::min (mainInCh, mainOutCh);
         for (int ch = 0; ch < copyCh; ++ch)
             mainOutBuf.copyFrom (ch, 0, mainInBuf.getReadPointer (ch), numSamples);
@@ -398,6 +438,161 @@ void SpatialExpanderAudioProcessor::processBlock (juce::AudioBuffer<float>& buff
         loudnessMeter.process (mainOutBuf,
                                getBus(false, 0)->getCurrentLayout(),
                                mainOutBuf.getNumChannels());
+
+        // ── Fade-out (bypass path) ──
+        if (bypassState == CalState::FadingOut)
+        {
+            int left = fadeSamplesLeft.load();
+            int n = std::min (left, numSamples);
+
+            std::vector<float*> fadePtrs;
+            fadePtrs.reserve(mainOutCh + 8);
+            for (int c = 0; c < mainOutCh; ++c)
+                fadePtrs.push_back(mainOutBuf.getWritePointer(c));
+            for (int busIdx = 1; busIdx < getBusCount(false); ++busIdx)
+            {
+                auto* bus = getBus(false, busIdx);
+                if (bus == nullptr || !bus->isEnabled()) continue;
+                auto buf = getBusBuffer(buffer, false, busIdx);
+                for (int c = 0; c < buf.getNumChannels(); ++c)
+                    fadePtrs.push_back(buf.getWritePointer(c));
+            }
+
+            for (int i = 0; i < n; ++i)
+            {
+                float gain = static_cast<float> (left) / static_cast<float> (fadeSamplesTotal);
+                for (auto* ptr : fadePtrs)
+                    ptr[i] *= gain;
+                --left;
+            }
+            for (int i = n; i < numSamples; ++i)
+                for (auto* ptr : fadePtrs)
+                    ptr[i] = 0.0f;
+            fadeSamplesLeft.store (left);
+            if (left <= 0)
+            {
+                bool hasWork = (pendingWindowOrder.load() > 0) ||
+                               pendingFormatChange.load() ||
+                               pendingRecalibration.load();
+                if (hasWork)
+                {
+                    measPhase = 0;
+                    calState.store (CalState::Reconfiguring);
+                    triggerAsyncUpdate();
+                }
+                else
+                {
+                    measPhase = 1;
+                    measuredLatencySamples.store (-1);
+                    int fftSize = stft.fftSize;
+                    measTotalLen = fftSize * 8;
+                    measImpulsePos = fftSize;
+                    std::fill (measInput.begin(), measInput.begin() + measTotalLen, 0.0f);
+                    measInput[measImpulsePos] = 1.0f;
+                    measNumSpecOut = mainOutCh;
+                    for (int ch = 0; ch < measNumSpecOut; ++ch)
+                        std::fill (measOutput[ch].begin(), measOutput[ch].begin() + measTotalLen, 0.0f);
+                    measTotalPos = 0;
+                    measFlushSamples = static_cast<int> (std::ceil (getSampleRate() * 3.0));
+                    measFlushPos = 0;
+                    measLoudnessWasPaused = loudnessMeter.isPaused();
+                    loudnessMeter.setPaused (true);
+                    calState.store (CalState::Normal);
+                }
+            }
+            return;
+        }
+
+        // ── Latency measurement: capture final output + mute ──
+        if (measPhase == 1)
+        {
+            int remain = measTotalLen - measTotalPos;
+            int block = std::min (numSamples, remain);
+            if (block > 0)
+            {
+                int safeOut = std::min (measNumSpecOut, mainOutCh);
+                for (int ch = 0; ch < safeOut; ++ch)
+                    juce::FloatVectorOperations::copy (measOutput[ch].data() + measTotalPos, mainOutBuf.getReadPointer (ch), block);
+                measTotalPos += block;
+                if (measTotalPos >= measTotalLen)
+                {
+                    float peak = 0.0f;
+                    int peakPos = 0;
+                    for (int ch = 0; ch < measNumSpecOut; ++ch)
+                        for (int i = 0; i < measTotalLen; ++i)
+                        {
+                            float absVal = std::abs (measOutput[ch][i]);
+                            if (absVal > peak) { peak = absVal; peakPos = i; }
+                        }
+                    measuredLatencySamples.store (peakPos - measImpulsePos);
+                    measPhase = 2;
+                    measFlushPos = 0;
+                }
+            }
+            for (int c = 0; c < mainOutCh; ++c)
+                mainOutBuf.clear (c, 0, numSamples);
+            for (int busIdx = 1; busIdx < getBusCount(false); ++busIdx)
+            {
+                auto* bus = getBus(false, busIdx);
+                if (bus == nullptr || !bus->isEnabled()) continue;
+                getBusBuffer(buffer, false, busIdx).clear();
+            }
+        }
+
+        // ── Measurement flush (bypass path): keep muted until loudness windows drain ──
+        if (measPhase == 2)
+        {
+            int block = std::min (numSamples, measFlushSamples - measFlushPos);
+            measFlushPos += block;
+            if (measFlushPos >= measFlushSamples)
+            {
+                measPhase = 0;
+                loudnessMeter.setPaused (measLoudnessWasPaused);
+                fadeSamplesLeft.store (fadeSamplesTotal);
+                calState.store (CalState::FadingIn);
+            }
+            for (int c = 0; c < mainOutCh; ++c)
+                mainOutBuf.clear (c, 0, numSamples);
+            for (int busIdx = 1; busIdx < getBusCount(false); ++busIdx)
+            {
+                auto* bus = getBus(false, busIdx);
+                if (bus == nullptr || !bus->isEnabled()) continue;
+                getBusBuffer(buffer, false, busIdx).clear();
+            }
+        }
+
+        // ── Fade-in (bypass path) ──
+        if (bypassState == CalState::FadingIn)
+        {
+            int left = fadeSamplesLeft.load();
+            int n = std::min (left, numSamples);
+            int total = fadeSamplesTotal;
+
+            std::vector<float*> fadePtrs;
+            fadePtrs.reserve(mainOutCh + 8);
+            for (int c = 0; c < mainOutCh; ++c)
+                fadePtrs.push_back(mainOutBuf.getWritePointer(c));
+            for (int busIdx = 1; busIdx < getBusCount(false); ++busIdx)
+            {
+                auto* bus = getBus(false, busIdx);
+                if (bus == nullptr || !bus->isEnabled()) continue;
+                auto buf = getBusBuffer(buffer, false, busIdx);
+                for (int c = 0; c < buf.getNumChannels(); ++c)
+                    fadePtrs.push_back(buf.getWritePointer(c));
+            }
+
+            for (int i = 0; i < n; ++i)
+            {
+                float gain = 1.0f - static_cast<float> (left - 1) / static_cast<float> (total);
+                for (auto* ptr : fadePtrs)
+                    ptr[i] *= gain;
+                --left;
+            }
+            fadeSamplesLeft.store (left);
+            if (left <= 0)
+                calState.store (CalState::Normal);
+        }
+
         return;
     }
 
@@ -890,8 +1085,34 @@ void SpatialExpanderAudioProcessor::processBlock (juce::AudioBuffer<float>& buff
         fadeSamplesLeft.store (left);
         if (left <= 0)
         {
-            calState.store (CalState::Reconfiguring);
-            triggerAsyncUpdate();
+            bool hasWork = (pendingWindowOrder.load() > 0) ||
+                           pendingFormatChange.load() ||
+                           pendingRecalibration.load();
+            if (hasWork)
+            {
+                measPhase = 0;
+                calState.store (CalState::Reconfiguring);
+                triggerAsyncUpdate();
+            }
+            else
+            {
+                measPhase = 1;
+                measuredLatencySamples.store (-1);
+                int fftSize = stft.fftSize;
+                measTotalLen = fftSize * 8;
+                measImpulsePos = fftSize;
+                std::fill (measInput.begin(), measInput.begin() + measTotalLen, 0.0f);
+                measInput[measImpulsePos] = 1.0f;
+                measNumSpecOut = mainOutCh;
+                for (int ch = 0; ch < measNumSpecOut; ++ch)
+                    std::fill (measOutput[ch].begin(), measOutput[ch].begin() + measTotalLen, 0.0f);
+                measTotalPos = 0;
+                measFlushSamples = static_cast<int> (std::ceil (getSampleRate() * 3.0));
+                measFlushPos = 0;
+                measLoudnessWasPaused = loudnessMeter.isPaused();
+                loudnessMeter.setPaused (true);
+                calState.store (CalState::Normal);
+            }
         }
         return;
     }
@@ -927,6 +1148,64 @@ void SpatialExpanderAudioProcessor::processBlock (juce::AudioBuffer<float>& buff
         if (left <= 0)
             calState.store (CalState::Normal);
     }
+
+    // ── Latency measurement: capture final output + mute ──
+    if (measPhase == 1)
+    {
+        int remain = measTotalLen - measTotalPos;
+        int block = std::min (numSamples, remain);
+        if (block > 0)
+        {
+            int safeOut = std::min (measNumSpecOut, mainOutCh);
+            for (int ch = 0; ch < safeOut; ++ch)
+                juce::FloatVectorOperations::copy (measOutput[ch].data() + measTotalPos, mainOutBuf.getReadPointer (ch), block);
+            measTotalPos += block;
+            if (measTotalPos >= measTotalLen)
+            {
+                float peak = 0.0f;
+                int peakPos = 0;
+                for (int ch = 0; ch < measNumSpecOut; ++ch)
+                    for (int i = 0; i < measTotalLen; ++i)
+                    {
+                        float absVal = std::abs (measOutput[ch][i]);
+                        if (absVal > peak) { peak = absVal; peakPos = i; }
+                    }
+                measuredLatencySamples.store (peakPos - measImpulsePos);
+                measPhase = 2;
+                measFlushPos = 0;
+            }
+        }
+        for (int c = 0; c < mainOutCh; ++c)
+            mainOutBuf.clear (c, 0, numSamples);
+        for (int busIdx = 1; busIdx < getBusCount(false); ++busIdx)
+        {
+            auto* bus = getBus(false, busIdx);
+            if (bus == nullptr || !bus->isEnabled()) continue;
+            getBusBuffer(buffer, false, busIdx).clear();
+        }
+    }
+
+    // ── Measurement flush: keep muted until loudness windows drain ──
+    if (measPhase == 2)
+    {
+        int block = std::min (numSamples, measFlushSamples - measFlushPos);
+        measFlushPos += block;
+        if (measFlushPos >= measFlushSamples)
+        {
+            measPhase = 0;
+            loudnessMeter.setPaused (measLoudnessWasPaused);
+            fadeSamplesLeft.store (fadeSamplesTotal);
+            calState.store (CalState::FadingIn);
+        }
+        for (int c = 0; c < mainOutCh; ++c)
+            mainOutBuf.clear (c, 0, numSamples);
+        for (int busIdx = 1; busIdx < getBusCount(false); ++busIdx)
+        {
+            auto* bus = getBus(false, busIdx);
+            if (bus == nullptr || !bus->isEnabled()) continue;
+            getBusBuffer(buffer, false, busIdx).clear();
+        }
+    }
 }
 
 void SpatialExpanderAudioProcessor::parameterChanged (const juce::String& parameterID, float /*newValue*/)
@@ -938,9 +1217,10 @@ void SpatialExpanderAudioProcessor::parameterChanged (const juce::String& parame
         if (idx == 4)
         {
             // Switching to bypass mode: no fade, no reconfigure, just zero latency
-            if (calState.load() != CalState::Normal)
+            if (calState.load() != CalState::Normal || measPhase.load() != 0)
             {
-                // Cancel any pending reconfiguration
+                // Cancel any pending reconfiguration or measurement
+                measPhase.store (0);
                 calState.store (CalState::Normal);
                 fadeSamplesLeft.store (0);
             }
@@ -953,7 +1233,7 @@ void SpatialExpanderAudioProcessor::parameterChanged (const juce::String& parame
             return;
         }
 
-        if (calState.load() != CalState::Normal)
+        if (calState.load() != CalState::Normal || measPhase.load() != 0)
             return;
 
         pendingWindowOrder.store (9 + idx);
@@ -962,7 +1242,7 @@ void SpatialExpanderAudioProcessor::parameterChanged (const juce::String& parame
     }
     else if (parameterID == "inputFormat")
     {
-        if (calState.load() != CalState::Normal)
+        if (calState.load() != CalState::Normal || measPhase.load() != 0)
             return;
 
         pendingFormatChange.store (true);
@@ -971,7 +1251,7 @@ void SpatialExpanderAudioProcessor::parameterChanged (const juce::String& parame
     }
     else if (parameterID == "outputFormat")
     {
-        if (calState.load() != CalState::Normal)
+        if (calState.load() != CalState::Normal || measPhase.load() != 0)
             return;
 
         pendingFormatChange.store (true);
@@ -980,7 +1260,7 @@ void SpatialExpanderAudioProcessor::parameterChanged (const juce::String& parame
     }
     else if (parameterID == "crosstalk" || parameterID == "stretch" || parameterID == "rearBias")
     {
-        if (calState.load() != CalState::Normal)
+        if (calState.load() != CalState::Normal || measPhase.load() != 0)
             return;
 
         if (recalibrationGestureCount.load() > 0)
@@ -2491,7 +2771,7 @@ static juce::String getChannelTypeName (juce::AudioChannelSet::ChannelType type)
     }
 }
 
-juce::String SpatialExpanderAudioProcessor::getLoudnessDebugText() const
+juce::String SpatialExpanderAudioProcessor::getDebugText() const
 {
     auto& info = loudnessMeter.getChannelDebugInfo();
     juce::String text;

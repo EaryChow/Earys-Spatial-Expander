@@ -77,9 +77,8 @@ private:
 
     void updateChGainPanel();
 
-    // measurement UI hidden, logic kept in processor for future use
-    // juce::TextButton measureButton;
-    // juce::Label latencyResultLabel;
+    juce::TextButton measureButton;
+    juce::Label latencyResultLabel;
 
     juce::Label loudnessSectionLabel;
     juce::Label loudnessReadoutLabel;
@@ -90,7 +89,7 @@ private:
 
     int lastDetectedFormat = -1;
     int lastMinOut = -1;
-    // int lastDisplayedLatency = -999;
+    int lastDisplayedLatency = -999;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (SpatialExpanderAudioProcessorEditor)
 };

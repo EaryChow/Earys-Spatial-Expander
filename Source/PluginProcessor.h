@@ -63,8 +63,9 @@ public:
     bool isLoudnessPaused() const { return loudnessMeter.isPaused(); }
     void setLoudnessPaused (bool p) { loudnessMeter.setPaused (p); }
     void refreshLoudness() { loudnessMeter.clearHistory(); }
-    juce::String getLoudnessDebugText() const;
+    juce::String getDebugText() const;
     bool isBypassed() const noexcept;
+    bool isMeasurementActive() const noexcept { return measPhase != 0; }
 
     enum OutputFormat { Auto = 0, Fmt30, Fmt51, Fmt71, Fmt916 };
     enum AuxBusIdx { AuxFront = 1, AuxCenter, AuxLFE, AuxWide, AuxSide, AuxRear };
@@ -160,8 +161,8 @@ private:
 
     std::atomic<float>* chOffParams[9] = {};
 
-    // Latency measurement state (audio-thread only after trigger)
-    int measPhase = 0;
+    // Latency measurement state
+    std::atomic<int> measPhase { 0 };
     int measTotalPos = 0;
     int measTotalLen = 0;
     int measImpulsePos = 0;
@@ -169,6 +170,9 @@ private:
 
     std::vector<float> measInput;
     std::vector<std::vector<float>> measOutput;
+    int measFlushSamples = 0;
+    int measFlushPos = 0;
+    bool measLoudnessWasPaused = false;
 
     // Gain staging constants for surround upmix
 
