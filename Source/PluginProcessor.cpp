@@ -527,6 +527,8 @@ void SpatialExpanderAudioProcessor::processBlock (juce::AudioBuffer<float>& buff
                     measuredLatencySamples.store (peakPos - measImpulsePos);
                     measPhase = 2;
                     measFlushPos = 0;
+                    fadeSamplesLeft.store (fadeSamplesTotal);
+                    calState.store (CalState::FadingIn);
                 }
             }
             for (int c = 0; c < mainOutCh; ++c)
@@ -539,7 +541,7 @@ void SpatialExpanderAudioProcessor::processBlock (juce::AudioBuffer<float>& buff
             }
         }
 
-        // ── Measurement flush (bypass path): keep muted until loudness windows drain ──
+        // ── Measurement flush (bypass path): meter paused only ──
         if (measPhase == 2)
         {
             int block = std::min (numSamples, measFlushSamples - measFlushPos);
@@ -548,16 +550,6 @@ void SpatialExpanderAudioProcessor::processBlock (juce::AudioBuffer<float>& buff
             {
                 measPhase = 0;
                 loudnessMeter.setPaused (measLoudnessWasPaused);
-                fadeSamplesLeft.store (fadeSamplesTotal);
-                calState.store (CalState::FadingIn);
-            }
-            for (int c = 0; c < mainOutCh; ++c)
-                mainOutBuf.clear (c, 0, numSamples);
-            for (int busIdx = 1; busIdx < getBusCount(false); ++busIdx)
-            {
-                auto* bus = getBus(false, busIdx);
-                if (bus == nullptr || !bus->isEnabled()) continue;
-                getBusBuffer(buffer, false, busIdx).clear();
             }
         }
 
@@ -1173,6 +1165,8 @@ void SpatialExpanderAudioProcessor::processBlock (juce::AudioBuffer<float>& buff
                 measuredLatencySamples.store (peakPos - measImpulsePos);
                 measPhase = 2;
                 measFlushPos = 0;
+                fadeSamplesLeft.store (fadeSamplesTotal);
+                calState.store (CalState::FadingIn);
             }
         }
         for (int c = 0; c < mainOutCh; ++c)
@@ -1185,7 +1179,7 @@ void SpatialExpanderAudioProcessor::processBlock (juce::AudioBuffer<float>& buff
         }
     }
 
-    // ── Measurement flush: keep muted until loudness windows drain ──
+    // ── Measurement flush: meter paused only ──
     if (measPhase == 2)
     {
         int block = std::min (numSamples, measFlushSamples - measFlushPos);
@@ -1194,16 +1188,6 @@ void SpatialExpanderAudioProcessor::processBlock (juce::AudioBuffer<float>& buff
         {
             measPhase = 0;
             loudnessMeter.setPaused (measLoudnessWasPaused);
-            fadeSamplesLeft.store (fadeSamplesTotal);
-            calState.store (CalState::FadingIn);
-        }
-        for (int c = 0; c < mainOutCh; ++c)
-            mainOutBuf.clear (c, 0, numSamples);
-        for (int busIdx = 1; busIdx < getBusCount(false); ++busIdx)
-        {
-            auto* bus = getBus(false, busIdx);
-            if (bus == nullptr || !bus->isEnabled()) continue;
-            getBusBuffer(buffer, false, busIdx).clear();
         }
     }
 }
