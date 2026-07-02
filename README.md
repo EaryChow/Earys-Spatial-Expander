@@ -1,6 +1,6 @@
 ## What?
 
-Eary's Spatial Expander is an free and open source **frequency-domain spatial upmixer** VST3 plugin. It runs a Short-Time Fourier Transform (STFT) on the stereo input, performs a series of "phantom-center extraction" passes inside the frequency domain, and then converts each resulting channel back to audio with its own inverse transform. The result is up to 9 discrete spatial channels plus LFE, each containing a full-range, coherent signal.
+Eary's Spatial Expander is an free and open source **frequency-domain spatial upmixer** VST3 plugin. It runs a Short-Time Fourier Transform (STFT) on the input, performs a series of "phantom-center extraction" passes inside the frequency domain, and then converts each resulting channel back to audio with its own inverse transform. The result is up to 9 discrete spatial channels plus LFE, each containing a full-range, coherent signal.
 
 It supports **3.0, 5.1, 7.1, and 9.1** output formats (9.1 requires a 9.1.6 bus container even though the height channels are not used), and can automatically detect your DAW's surround bus layout.
 
@@ -31,7 +31,11 @@ Elements that the mixing engineer put to the widest positions are now in the rea
 ## How to use
 
 ### 1. Insert the plugin
-Load Spatial Expander on a surround track or bus that contains the original stereo signals (for most VST hosts, they expect the input and output format to be the same. Cantabile Lite being node-based and accepting arbitrary input and output is an exception). The plugin accepts input with ≥ 2 channels, but **only the first two channels (L/R) are processed.** If your input has more than 2 channels, a warning will appear. Recognized input formats are **stereo, 3.0, 5.1, 7.1, 5.1.x, 7.1.x and 9.1.x**.
+Load Spatial Expander on a surround track or bus that contains the original stereo signals (for most VST hosts, they expect the input and output format to be the same. Cantabile Lite being node-based and accepting arbitrary input and output is an exception). 
+
+**Input Format:** Select **Stereo**, **5.1**, or **7.1** to match your source. In Stereo mode, only the first two channels (L/R) are processed. In 5.1 or 7.1 mode, the plugin performs back-center extraction and builds a synthetic stereo field from all bed channels before running the cascade.
+
+Recognized input formats are **stereo, 3.0, 5.1, 7.1, 5.1.x, 7.1.x and 9.1.x**. If your input has more than 2 channels while Stereo mode is selected, a warning will appear.
 
 ### 2. Set the Output Format
 Open the plugin UI and choose your target layout:
@@ -47,7 +51,7 @@ Open the plugin UI and choose your target layout:
 The combo box shows **Auto (DetectedFormat)**, that should satisfy most cases of track-bus style hosts. For Cantabile Lite users, the auto would just fallback to 5.1 since Cantabile Lite does not even have a bus concept, so manual selection of output format is needed. 
 
 ### 3. Choose your Quality / Latency trade-off
-The **Quality/Latency** selector offers four STFT window sizes:
+The **Quality/Latency** selector offers five modes:
 
 | Mode | Latency (samples) | Latency @ 48 kHz |
 |------|-------------------|------------------|
@@ -55,8 +59,11 @@ The **Quality/Latency** selector offers four STFT window sizes:
 | Low-Mid | 992 | **20.7 ms** |
 | Mid | 1984 | **41.3 ms** |
 | High | 3968 | **82.7 ms** |
+| Bypass/Realtime | 0 | **0 ms** |
 
 Higher latency = larger FFT = better frequency resolution and cleaner extraction. Most offline DAWs automatically compensates for the reported latency, but realtime hosts like Cantabile Lite do not, so be ware.
+
+**Bypass/Realtime** passes audio through unchanged with zero latency and minimal CPU. This is useful for A/B comparison.
 
 **Note:** Switching latency, output format, crosstalk, stretch, or rear bias during playback causes a brief recalibration pause (~50–100 ms) after you release the control.
 
@@ -78,11 +85,14 @@ You can route these to individual speaker channels or external processors.
 
 ## All Parameters Explained
 
+### Input Format
+Selects the source bed layout: **Stereo**, **5.1**, or **7.1**. This determines how the plugin interprets incoming channels. In 5.1 or 7.1 mode, the plugin extracts the back-center phantom image and remaps all bed channels into a synthetic stereo field before the cascade, preserving the original spatial relationships.
+
 ### Output Format
 Selects the surround bed size. **Auto** is recommended—it detects the channel layout from the loaded bus and adapts the extraction cascade accordingly.
 
 ### Quality / Latency
-The plugin does have latency, and it's required by the algorithm. It needs larger latency budget for higher sound quality. The UI shows the latency in both **samples** and **milliseconds** (updated dynamically for your session sample rate). There are four tiers of quality/latency modes to choose from, default to Low-Mid tier.
+The plugin does have latency, and it's required by the algorithm. It needs larger latency budget for higher sound quality. The UI shows the latency in both **samples** and **milliseconds** (updated dynamically for your session sample rate). There are four tiers of quality/latency modes plus a Bypass mode to choose from, default to Low-Mid tier.
 
 ### Stretch
 Controls how aggressively the stereo field is stretched across the surround ring.
@@ -126,10 +136,22 @@ These are applied **after** automatic calibration and are intended for content-l
 
 ---
 
+## Loudness Meter
+
+The plugin includes an integrated **ITU-R BS.1770-4** loudness meter showing:
+
+- **Momentary** (400 ms)
+- **Short-term** (3 s) and Short-term Max
+- **Integrated** LUFS
+
+The meter starts **paused** by default. Click **Resume** to begin accumulation, **Pause** to hold, and **Refresh** to reset the integrated history. This is useful for verifying output levels after calibration.
+
+---
+
 ## How the Algorithm Works
 
 ### 1. STFT Front End
-The input stereo signal is transformed into the frequency domain using a **Kaiser-Bessel window** (β = 0.5) with **96.875 % overlap** (hop size = FFT size / 32). The synthesis window is computed to satisfy the COLA (Constant Overlap-Add) constraint, ensuring perfect reconstruction.
+The input signal is transformed into the frequency domain using a **Kaiser-Bessel window** (β = 0.5) with **96.875 % overlap** (hop size = FFT size / 32). The synthesis window is computed to satisfy the COLA (Constant Overlap-Add) constraint, ensuring perfect reconstruction.
 
 This high overlap rate improves the processing resolution and minimizes the "watery" artifacts common in lower-overlap STFT processors. But note some amount of the artifacts will still be present for the lower quality/latency modes. 
 
@@ -149,7 +171,7 @@ Residual A = A - C
 Residual B = B - C
 ```
 
-### 3. The Cascade (Frequency-Domain Only)
+### 3. The Cascade (Frequency-Domain-Only)
 The extraction is repeated in successive layers, always operating on complex spectra—**never converting back to time domain between layers.**
 
 | Layer | Inputs | Extracts |
@@ -164,7 +186,44 @@ The extraction is repeated in successive layers, always operating on complex spe
 
 After all layers, each final spectrum is converted to the time domain via its own inverse FFT. The result is up to 9 discrete channels plus LFE.
 
-### 4. Phase Coherence Restoration
+### 4. Multi-Channel Input Path (5.1 / 7.1)
+When the Input Format is set to 5.1 or 7.1, the plugin first extracts the back-center phantom image from the surround/rear pair using the same minimum-magnitude rule. The residual surround channels and the front/center channels are then remapped into a **synthetic stereo** field via constant-power panning:
+
+**Constant-power panning formula:**
+
+```
+r = 10^(Δ / 20)
+L_gain = r / sqrt(1 + r²)
+R_gain = 1 / sqrt(1 + r²)
+```
+
+Each input channel is assigned a fixed ILD Δ so that it lands in the correct spatial sector when fed into the existing stereo cascade:
+
+**5.1 Input → Synthetic Stereo**
+
+| 5.1 Channel | ILD Δ | L Gain | R Gain | Notes |
+|-------------|-------|--------|--------|-------|
+| **C** | **0 dB** | 0.707 | 0.707 | Center phantom |
+| **FL** | **+6 dB** | 0.894 | 0.447 | Cascade extracts pure Front L at Layer 2 |
+| **FR** | **−6 dB** | 0.447 | 0.894 | Cascade extracts pure Front R at Layer 2 |
+| **SL′** | **+20 dB** | 0.995 | 0.100 | Residual after BC extraction; cascade dumps to Rear L |
+| **SR′** | **−20 dB** | 0.100 | 0.995 | Residual after BC extraction; cascade dumps to Rear R |
+
+**7.1 Input → Synthetic Stereo**
+
+| 7.1 Channel | ILD Δ | L Gain | R Gain | Notes |
+|-------------|-------|--------|--------|-------|
+| **C** | **0 dB** | 0.707 | 0.707 | Center phantom |
+| **FL** | **+6 dB** | 0.894 | 0.447 | Cascade extracts pure Front L at Layer 2 |
+| **FR** | **−6 dB** | 0.447 | 0.894 | Cascade extracts pure Front R at Layer 2 |
+| **Side L** | **+9.5 dB** | 0.949 | 0.317 | Cascade extracts pure Side L at Layer 3 |
+| **Side R** | **−9.5 dB** | 0.317 | 0.949 | Cascade extracts pure Side R at Layer 3 |
+| **RL′** | **+20 dB** | 0.995 | 0.100 | Residual after BC extraction; cascade dumps to Rear L |
+| **RR′** | **−20 dB** | 0.100 | 0.995 | Residual after BC extraction; cascade dumps to Rear R |
+
+Because constant-power panning ensures `L² + R² = 1` per channel, the summed synthetic stereo may have a different total energy than the original multi-channel bed. The plugin computes `sqrt(origEnergy / synEnergy)` and rescales both synthetic channels uniformly before the cascade, preserving the ILDs while preventing a loudness jump. After the cascade and calibration, the extracted back-center is reinjected into the rear speakers so rear-center content does not collapse to the front.
+
+### 5. Phase Coherence Restoration
 After the cascade, each derived channel's **phase** is restored from its original parent channel:
 
 - **Front L, Side L, Wide L, Rear L** inherit the original **Left** input phase.
@@ -173,7 +232,7 @@ After the cascade, each derived channel's **phase** is restored from its origina
 
 This preserves the natural stereo coherence of the original recording and prevents "phasiness" when the surround channels play together.
 
-### 5. Spatial Stretching
+### 6. Spatial Stretching
 The **Stretch** parameter remaps extracted channels to output speakers. At full stretch, each extracted layer feeds its own speaker. At zero stretch, surround layers are folded forward:
 
 - **5.1:** Rear → Front
@@ -182,7 +241,7 @@ The **Stretch** parameter remaps extracted channels to output speakers. At full 
 
 This is applied in the frequency domain before calibration.
 
-### 6. Automatic Calibration
+### 7. Automatic Calibration
 Because the cascade naturally changes total loudness as a source pans (a center-panned source splits into multiple correlated channels), the plugin runs an internal **automatic calibration** at startup and whenever you change format, latency, stretch, crosstalk, or rear bias.
 
 **Calibration with perceptual weighting:**
@@ -192,12 +251,12 @@ During playback, the plugin computes the ILD independently for every FFT bin, lo
 
 There is no automatic peak limiter after calibration. If you are facing any clipping issue, use the preamp slider to adjust the input gain.
 
-### 7. LFE Extraction
+### 8. LFE Extraction
 The LFE channel is derived from `(L+R)/2` passed through a **4th-order Bessel-Thomson low-pass filter** (two cascaded biquads). Bessel-Thomson was chosen because it has maximally flat group delay, making fixed-delay compensation accurate across the passband.
 
 The LFE path is delayed by a compensation line so that its total latency matches the plugin's reported latency, keeping it sample-aligned with the main channels.
 
-### 8. Leak Center, Crosstalk & Output
+### 9. Leak Center, Crosstalk & Output
 **Crosstalk** is applied inside the frequency-domain pipeline before calibration, so the gain table automatically compensates for any loudness change. It leaks each speaker's signal to its adjacent neighbors (e.g., Front L → Wide L → Side L → Rear L) using a loudness-preserving formula, smoothing spatial transitions. After the iSTFT, **Leak Center** redistributes the calibrated Center signal to the **Front L/R** speakers. Finally, channels are mapped to your DAW's output bus using standard channel type identifiers (Left, Right, Centre, LFE, Side, Rear, Wide, etc.) with intelligent index fallbacks for discrete/custom layouts.
 
 ---
