@@ -157,11 +157,31 @@ SpatialExpanderAudioProcessorEditor::SpatialExpanderAudioProcessorEditor (
     // latencyResultLabel.setJustificationType (juce::Justification::centred);
     // addAndMakeVisible (latencyResultLabel);
 
-    loudnessLabel.setFont (juce::Font (juce::FontOptions (14.0f, juce::Font::bold)));
-    loudnessLabel.setColour (juce::Label::textColourId, juce::Colours::lime);
-    loudnessLabel.setJustificationType (juce::Justification::centred);
-    loudnessLabel.setText ("Momentary Loudness: --", juce::dontSendNotification);
-    addAndMakeVisible (loudnessLabel);
+    loudnessSectionLabel.setText ("Loudness Meter", juce::dontSendNotification);
+    loudnessSectionLabel.setFont (juce::Font (juce::FontOptions (12.0f, juce::Font::bold)));
+    loudnessSectionLabel.setJustificationType (juce::Justification::centred);
+    addAndMakeVisible (loudnessSectionLabel);
+
+    loudnessReadoutLabel.setFont (juce::Font (juce::FontOptions (11.0f)));
+    loudnessReadoutLabel.setJustificationType (juce::Justification::centred);
+    loudnessReadoutLabel.setColour (juce::Label::textColourId, juce::Colours::lime);
+    addAndMakeVisible (loudnessReadoutLabel);
+
+    loudnessPauseButton.setButtonText (processor.isLoudnessPaused() ? "Resume" : "Pause");
+    loudnessPauseButton.onClick = [this]
+    {
+        bool currentlyPaused = processor.isLoudnessPaused();
+        processor.setLoudnessPaused (!currentlyPaused);
+        loudnessPauseButton.setButtonText (currentlyPaused ? "Pause" : "Resume");
+    };
+    addAndMakeVisible (loudnessPauseButton);
+
+    loudnessRefreshButton.setButtonText ("Refresh");
+    loudnessRefreshButton.onClick = [this]
+    {
+        processor.refreshLoudness();
+    };
+    addAndMakeVisible (loudnessRefreshButton);
 
     debugText.setMultiLine (true, true);
     debugText.setReadOnly (true);
@@ -228,7 +248,7 @@ SpatialExpanderAudioProcessorEditor::SpatialExpanderAudioProcessorEditor (
     updateFormatComboBox();
     updateChGainPanel();
 
-    setSize (550, 720);
+    setSize (550, 700);
     startTimerHz (4);
 }
 
@@ -264,13 +284,13 @@ void SpatialExpanderAudioProcessorEditor::updateChGainPanel()
     }
 
     // Resize window to fit
-    int newH = 720;
+    int newH = 700;
     if (show)
     {
         int extraRows = 0;
         for (int i = 0; i < numChOff; ++i)
             if (visible[i]) ++extraRows;
-        newH = 720 + 24 + static_cast<int> (chGainInfoLabel.getFont().getHeight()) + 6 + extraRows * 34 + 10;
+        newH = 700 + 24 + static_cast<int> (chGainInfoLabel.getFont().getHeight()) + 6 + extraRows * 34 + 10;
     }
     if (debugToggle.getToggleState())
         newH += 24 + 80 + 6;
@@ -280,6 +300,8 @@ void SpatialExpanderAudioProcessorEditor::updateChGainPanel()
 void SpatialExpanderAudioProcessorEditor::paint (juce::Graphics& g)
 {
     g.fillAll (getLookAndFeel().findColour (juce::ResizableWindow::backgroundColourId));
+
+
 }
 
 void SpatialExpanderAudioProcessorEditor::resized()
@@ -315,10 +337,14 @@ void SpatialExpanderAudioProcessorEditor::resized()
     preampLabel.setBounds (sl.removeFromLeft (100));
     preampSlider.setBounds (sl.reduced (5));
 
-    {
-        auto loudArea = area.removeFromTop (24);
-        loudnessLabel.setBounds (loudArea.reduced (10, 0));
-    }
+    // Loudness Meter Section
+    area.removeFromTop (8);
+    auto loudSectionArea = area.removeFromTop (70);
+    loudnessSectionLabel.setBounds (loudSectionArea.removeFromTop (16).reduced (10, 0));
+    loudnessReadoutLabel.setBounds (loudSectionArea.removeFromTop (20).reduced (10, 0));
+    auto btnArea = loudSectionArea.removeFromTop (24);
+    loudnessPauseButton.setBounds (btnArea.removeFromLeft (80).reduced (4, 2));
+    loudnessRefreshButton.setBounds (btnArea.removeFromLeft (80).reduced (4, 2));
 
     auto inFmtArea = area.removeFromTop (45);
     inFormatLabel.setBounds (inFmtArea.removeFromTop (20));
@@ -393,12 +419,22 @@ void SpatialExpanderAudioProcessorEditor::timerCallback()
     }
 
     {
-        double loudness = processor.getLoudness();
-        if (loudness < -60.0)
-    loudnessLabel.setText ("Momentary Loudness: --", juce::dontSendNotification);
-        else
-            loudnessLabel.setText ("Momentary Loudness: " + juce::String (loudness, 1) + " LUFS",
-                                   juce::dontSendNotification);
+        double mom = processor.getMomentaryLoudness();
+        double sh = processor.getShortTermLoudness();
+        double shMax = processor.getShortTermMaxLoudness();
+        double integ = processor.getIntegratedLoudness();
+
+        auto fmt = [] (double v) -> juce::String
+        {
+            if (v <= -69.0) return "--";
+            return juce::String (v, 1);
+        };
+
+        juce::String txt = "Momentary: " + fmt (mom)
+                         + "    Short: " + fmt (sh)
+                         + "    S-Max: " + fmt (shMax)
+                         + "    Int: " + fmt (integ);
+        loudnessReadoutLabel.setText (txt, juce::dontSendNotification);
     }
 
     debugText.setText (processor.getLoudnessDebugText(), juce::dontSendNotification);

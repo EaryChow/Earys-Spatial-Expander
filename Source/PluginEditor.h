@@ -81,7 +81,10 @@ private:
     // juce::TextButton measureButton;
     // juce::Label latencyResultLabel;
 
-    juce::Label loudnessLabel;
+    juce::Label loudnessSectionLabel;
+    juce::Label loudnessReadoutLabel;
+    juce::TextButton loudnessPauseButton;
+    juce::TextButton loudnessRefreshButton;
     juce::TextEditor debugText;
     juce::TextEditor warningText;
 

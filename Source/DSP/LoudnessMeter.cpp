@@ -9,18 +9,17 @@ void LoudnessMeter::prepare (double sr, int maxCh)
     stage1.assign (maxChannels, Biquad{});
     stage2.assign (maxChannels, Biquad{});
     channelWeights.assign (maxChannels, 0.0);
-
     chSqSum.resize (maxChannels);
-    channelDebugInfo.resize (maxChannels);
 
-    windowSize = static_cast<int> (std::ceil (sr * 0.4));
-    powerWindow.assign (windowSize, 0.0);
+    momentaryWindowSize = static_cast<int> (std::ceil (sr * 0.4));
+    momentaryWindow.assign (momentaryWindowSize, 0.0);
 
-    writePos = 0;
-    samplesFilled = 0;
-    runningSum = 0.0;
-    momentaryLoudness.store (-70.0);
+    shortWindowSize = static_cast<int> (std::ceil (sr * 3.0));
+    shortWindow.assign (shortWindowSize, 0.0);
 
+    blockSizeSamples = static_cast<int> (std::ceil (sr * 0.4));
+
+    reset();
     designKFilter (sr);
 }
 
@@ -28,11 +27,36 @@ void LoudnessMeter::reset()
 {
     for (auto& b : stage1) b.reset();
     for (auto& b : stage2) b.reset();
-    std::fill (powerWindow.begin(), powerWindow.end(), 0.0);
-    writePos = 0;
-    samplesFilled = 0;
-    runningSum = 0.0;
+
+    std::fill (momentaryWindow.begin(), momentaryWindow.end(), 0.0);
+    momentaryWritePos = 0;
+    momentarySamplesFilled = 0;
+    momentaryRunningSum = 0.0;
     momentaryLoudness.store (-70.0);
+
+    std::fill (shortWindow.begin(), shortWindow.end(), 0.0);
+    shortWritePos = 0;
+    shortSamplesFilled = 0;
+    shortRunningSum = 0.0;
+    shortTermLoudness.store (-70.0);
+    shortTermMax.store (-70.0);
+
+    integratedHistory.clear();
+    currentBlockPowerSum = 0.0;
+    currentBlockSamples = 0;
+    integratedLoudness.store (-70.0);
+
+    channelDebugInfo.assign (maxChannels, ChannelDebugInfo{});
+}
+
+void LoudnessMeter::setPaused (bool p) { paused.store (p); }
+bool LoudnessMeter::isPaused() const noexcept { return paused.load(); }
+
+void LoudnessMeter::clearHistory()
+{
+    shortTermMax.store (-70.0);
+    integratedHistory.clear();
+    integratedLoudness.store (-70.0);
 }
 
 void LoudnessMeter::designKFilter (double sr)
@@ -125,28 +149,20 @@ double LoudnessMeter::getChannelWeight (juce::AudioChannelSet::ChannelType type,
 
     if (type == CT::LFE) return 0.0;
 
-    // Unambiguous front
     if (type == CT::left || type == CT::right || type == CT::centre)
         return 1.0;
 
-    // Unambiguous side (90°)
-    if (type == CT::leftSurroundSide || type == CT::rightSurroundSide)
-        return 1.41;
-
-    // Unambiguous rear (>120°)
-    if (type == CT::leftSurroundRear || type == CT::rightSurroundRear)
-        return 1.0;
-
-    // Unambiguous wide
     if (type == CT::wideLeft || type == CT::wideRight)
         return 1.41;
 
-    // Ambiguous: leftCentre / rightCentre
-    // Fairlight (and some other DAWs) use Lc/Rc for the ±60° wide pair in 9.1+ beds.
-    // In small layouts (≤ 5.1) Lc/Rc might genuinely be front-half (~15°), so keep 1.0.
+    if (type == CT::leftSurroundSide || type == CT::rightSurroundSide)
+        return 1.41;
+
+    if (type == CT::leftSurroundRear || type == CT::rightSurroundRear)
+        return 1.0;
+
     if (type == CT::leftCentre || type == CT::rightCentre)
     {
-        // If the DAW has explicit wide channels, Lc/Rc are genuinely front-half (e.g. ~15°)
         bool hasExplicitWide = false;
         for (int ch = 0; ch < layout.size(); ++ch)
         {
@@ -160,7 +176,6 @@ double LoudnessMeter::getChannelWeight (juce::AudioChannelSet::ChannelType type,
         if (hasExplicitWide)
             return 1.0;
 
-        // Fairlight fingerprint: Lc/Rc appear AFTER Ls/Rs in a large bed
         int lcIndex = -1, lsIndex = -1;
         for (int ch = 0; ch < layout.size(); ++ch)
         {
@@ -171,18 +186,11 @@ double LoudnessMeter::getChannelWeight (juce::AudioChannelSet::ChannelType type,
                 lsIndex = ch;
         }
         if (lcIndex > lsIndex && lsIndex >= 0 && layout.size() >= 10)
-            return 1.41;   // Fairlight convention: Lc/Rc are the ±60° wide pair
+            return 1.41;
 
-        return 1.0;        // Default: front-half speaker
+        return 1.0;
     }
 
-    // Ambiguous: leftSurround / rightSurround
-    // This type is a catch-all. Disambiguate by looking at what OTHER specific types
-    // the DAW provided in the same layout:
-    //   - If Lss/Rss exists but Lsr/Rsr does NOT → Ls is rear   (Fairlight) → 1.00
-    //   - If Lsr/Rsr exists but Lss/Rss does NOT → Ls is side   (Standard)  → 1.41
-    //   - If both exist                          → Ls is 5.1 surround      → 1.41
-    //   - If neither exists                      → pure 5.1 layout         → 1.41
     if (type == CT::leftSurround || type == CT::rightSurround)
     {
         bool hasSide = false;
@@ -194,23 +202,20 @@ double LoudnessMeter::getChannelWeight (juce::AudioChannelSet::ChannelType type,
             if (t == CT::leftSurroundRear || t == CT::rightSurroundRear) hasRear = true;
         }
 
-        if (hasSide && !hasRear)      return 1.0;   // Fairlight convention
-        if (!hasSide && hasRear)      return 1.41;  // Standard JUCE convention
-        return 1.41;                                   // 5.1 surround or side
+        if (hasSide && !hasRear)      return 1.0;
+        if (!hasSide && hasRear)      return 1.41;
+        return 1.41;
     }
 
-    // Height / top channels (|φ| ≥ 30°) → 1.00
     if (type == CT::topFrontLeft  || type == CT::topFrontRight ||
         type == CT::topFrontCentre|| type == CT::topRearLeft    ||
         type == CT::topRearRight  || type == CT::topSideLeft    ||
         type == CT::topSideRight)
         return 1.0;
 
-    // Unknown / discrete layouts: index fallback (best guess)
     if (type == CT::unknown)
     {
         int n = layout.size();
-        // Count bed channels by stripping trailing top channels
         int bedChannels = n;
         for (int ch = n - 1; ch >= 0; --ch)
         {
@@ -223,28 +228,27 @@ double LoudnessMeter::getChannelWeight (juce::AudioChannelSet::ChannelType type,
                 break;
         }
 
-        if (bedChannels <= 3)       // 3.0
+        if (bedChannels <= 3)
         {
             if (chIndex <= 2) return 1.0;
         }
-        else if (bedChannels <= 6)  // 5.1
+        else if (bedChannels <= 6)
         {
             if (chIndex <= 2) return 1.0;
-            if (chIndex == 3) return 0.0;      // LFE
+            if (chIndex == 3) return 0.0;
             if (chIndex >= 4) return 1.41;
         }
-        else if (bedChannels <= 8)  // 7.1
+        else if (bedChannels <= 8)
         {
             if (chIndex <= 2) return 1.0;
-            if (chIndex == 3) return 0.0;      // LFE
+            if (chIndex == 3) return 0.0;
             if (chIndex == 4 || chIndex == 5) return 1.41;
             if (chIndex == 6 || chIndex == 7) return 1.0;
         }
-        else                        // 9.1+
+        else
         {
             if (chIndex <= 2) return 1.0;
-            if (chIndex == 3) return 0.0;      // LFE
-            // Standard bed: 4,5=side, 6,7=rear, 8,9=wide
+            if (chIndex == 3) return 0.0;
             if (chIndex == 4 || chIndex == 5) return 1.41;
             if (chIndex == 6 || chIndex == 7) return 1.0;
             if (chIndex == 8 || chIndex == 9) return 1.41;
@@ -267,7 +271,6 @@ void LoudnessMeter::process (const juce::AudioBuffer<float>& buffer,
         channelWeights[ch] = 0.0;
 
     std::fill (chSqSum.begin(), chSqSum.begin() + numChannels, 0.0);
-    double currentLoudness = -100.0;
 
     for (int i = 0; i < numSamples; ++i)
     {
@@ -286,26 +289,71 @@ void LoudnessMeter::process (const juce::AudioBuffer<float>& buffer,
             weightedPower += w * y2 * y2;
         }
 
-        if (samplesFilled < windowSize)
+        // Momentary (400 ms)
+        if (momentarySamplesFilled < momentaryWindowSize)
         {
-            powerWindow[writePos] = weightedPower;
-            runningSum += weightedPower;
-            ++samplesFilled;
-            writePos = (writePos + 1) % windowSize;
+            momentaryWindow[momentaryWritePos] = weightedPower;
+            momentaryRunningSum += weightedPower;
+            ++momentarySamplesFilled;
+            momentaryWritePos = (momentaryWritePos + 1) % momentaryWindowSize;
         }
         else
         {
-            double oldest = powerWindow[writePos];
-            runningSum += weightedPower - oldest;
-            powerWindow[writePos] = weightedPower;
-            writePos = (writePos + 1) % windowSize;
+            double oldest = momentaryWindow[momentaryWritePos];
+            momentaryRunningSum += weightedPower - oldest;
+            momentaryWindow[momentaryWritePos] = weightedPower;
+            momentaryWritePos = (momentaryWritePos + 1) % momentaryWindowSize;
         }
 
-        double meanPower = (samplesFilled > 0) ? (runningSum / samplesFilled) : 0.0;
-        if (meanPower > 1e-18)
-            currentLoudness = -0.691 + 10.0 * std::log10 (meanPower);
+        double momentaryMean = (momentarySamplesFilled > 0)
+            ? (momentaryRunningSum / momentarySamplesFilled) : 0.0;
+        double momentaryVal = (momentaryMean > 1e-18)
+            ? (-0.691 + 10.0 * std::log10 (momentaryMean)) : -100.0;
+        momentaryLoudness.store (momentaryVal);
+
+        // Short-term (3 s)
+        if (shortSamplesFilled < shortWindowSize)
+        {
+            shortWindow[shortWritePos] = weightedPower;
+            shortRunningSum += weightedPower;
+            ++shortSamplesFilled;
+            shortWritePos = (shortWritePos + 1) % shortWindowSize;
+        }
         else
-            currentLoudness = -100.0;
+        {
+            double oldest = shortWindow[shortWritePos];
+            shortRunningSum += weightedPower - oldest;
+            shortWindow[shortWritePos] = weightedPower;
+            shortWritePos = (shortWritePos + 1) % shortWindowSize;
+        }
+
+        double shortMean = (shortSamplesFilled > 0)
+            ? (shortRunningSum / shortSamplesFilled) : 0.0;
+        double shortVal = (shortMean > 1e-18)
+            ? (-0.691 + 10.0 * std::log10 (shortMean)) : -100.0;
+        shortTermLoudness.store (shortVal);
+
+        if (!paused.load())
+        {
+            if (shortVal > shortTermMax.load())
+                shortTermMax.store (shortVal);
+        }
+
+        // Integrated (400 ms blocks)
+        currentBlockPowerSum += weightedPower;
+        ++currentBlockSamples;
+
+        if (currentBlockSamples >= blockSizeSamples)
+        {
+            double blockPower = currentBlockPowerSum / currentBlockSamples;
+            if (!paused.load())
+            {
+                integratedHistory.push_back ({blockPower});
+                recomputeIntegrated();
+            }
+            currentBlockPowerSum = 0.0;
+            currentBlockSamples = 0;
+        }
     }
 
     for (int ch = 0; ch < numChannels; ++ch)
@@ -323,11 +371,62 @@ void LoudnessMeter::process (const juce::AudioBuffer<float>& buffer,
         d.weight = 0.0;
         d.kWeightedDbfs = -100.0;
     }
-
-    momentaryLoudness.store (currentLoudness);
 }
 
-double LoudnessMeter::getMomentaryLoudness() const noexcept
+void LoudnessMeter::recomputeIntegrated()
 {
-    return momentaryLoudness.load();
+    if (integratedHistory.empty())
+    {
+        integratedLoudness.store (-70.0);
+        return;
+    }
+
+    // Stage 1: absolute gate (-70 LKFS)
+    std::vector<double> stage1Powers;
+    stage1Powers.reserve (integratedHistory.size());
+    for (const auto& b : integratedHistory)
+    {
+        double l = -0.691 + 10.0 * std::log10 (b.power);
+        if (l > -70.0)
+            stage1Powers.push_back (b.power);
+    }
+
+    if (stage1Powers.empty())
+    {
+        integratedLoudness.store (-70.0);
+        return;
+    }
+
+    double sum1 = 0.0;
+    for (auto p : stage1Powers) sum1 += p;
+    double avgPower1 = sum1 / stage1Powers.size();
+    double gatedLoudness1 = -0.691 + 10.0 * std::log10 (avgPower1);
+
+    // Stage 2: relative threshold (-10 dB below stage 1)
+    double relThreshold = gatedLoudness1 - 10.0;
+
+    std::vector<double> stage2Powers;
+    stage2Powers.reserve (integratedHistory.size());
+    for (const auto& b : integratedHistory)
+    {
+        double l = -0.691 + 10.0 * std::log10 (b.power);
+        if (l > -70.0 && l > relThreshold)
+            stage2Powers.push_back (b.power);
+    }
+
+    if (stage2Powers.empty())
+    {
+        integratedLoudness.store (gatedLoudness1);
+        return;
+    }
+
+    double sum2 = 0.0;
+    for (auto p : stage2Powers) sum2 += p;
+    double avgPower2 = sum2 / stage2Powers.size();
+    integratedLoudness.store (-0.691 + 10.0 * std::log10 (avgPower2));
 }
+
+double LoudnessMeter::getMomentaryLoudness() const noexcept { return momentaryLoudness.load(); }
+double LoudnessMeter::getShortTermLoudness() const noexcept { return shortTermLoudness.load(); }
+double LoudnessMeter::getShortTermMaxLoudness() const noexcept { return shortTermMax.load(); }
+double LoudnessMeter::getIntegratedLoudness() const noexcept { return integratedLoudness.load(); }

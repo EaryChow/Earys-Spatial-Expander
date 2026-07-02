@@ -397,7 +397,7 @@ void SpatialExpanderAudioProcessor::processBlock (juce::AudioBuffer<float>& buff
 
         loudnessMeter.process (mainOutBuf,
                                getBus(false, 0)->getCurrentLayout(),
-                               3);
+                               mainOutBuf.getNumChannels());
         return;
     }
 

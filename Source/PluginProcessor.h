@@ -56,7 +56,13 @@ public:
     std::atomic<bool> pendingLatencyMeasurement { false };
     std::atomic<int> measuredLatencySamples { -1 };
 
-    double getLoudness() const { return loudnessMeter.getMomentaryLoudness(); }
+    double getMomentaryLoudness() const { return loudnessMeter.getMomentaryLoudness(); }
+    double getShortTermLoudness() const { return loudnessMeter.getShortTermLoudness(); }
+    double getShortTermMaxLoudness() const { return loudnessMeter.getShortTermMaxLoudness(); }
+    double getIntegratedLoudness() const { return loudnessMeter.getIntegratedLoudness(); }
+    bool isLoudnessPaused() const { return loudnessMeter.isPaused(); }
+    void setLoudnessPaused (bool p) { loudnessMeter.setPaused (p); }
+    void refreshLoudness() { loudnessMeter.clearHistory(); }
     juce::String getLoudnessDebugText() const;
     bool isBypassed() const noexcept;
 
