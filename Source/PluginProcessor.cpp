@@ -1212,6 +1212,7 @@ void SpatialExpanderAudioProcessor::parameterChanged (const juce::String& parame
 {
     if (parameterID == "latency")
     {
+        measuredLatencySamples.store (-1);
         int idx = static_cast<int> (apvts.getRawParameterValue ("latency")->load());
 
         if (idx == 4)
@@ -1234,7 +1235,22 @@ void SpatialExpanderAudioProcessor::parameterChanged (const juce::String& parame
         }
 
         if (calState.load() != CalState::Normal || measPhase.load() != 0)
-            return;
+        {
+            if (getLatencySamples() == 0)
+            {
+                measPhase.store (0);
+                calState.store (CalState::Normal);
+                fadeSamplesLeft.store (0);
+                pendingWindowOrder.store (0);
+                pendingFormatChange.store (false);
+                pendingRecalibration.store (false);
+                pendingRecalibrationAfterGesture.store (false);
+            }
+            else
+            {
+                return;
+            }
+        }
 
         pendingWindowOrder.store (9 + idx);
         fadeSamplesLeft.store (fadeSamplesTotal);
