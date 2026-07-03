@@ -345,6 +345,14 @@ void SpatialExpanderAudioProcessor::processBlock (juce::AudioBuffer<float>& buff
     {
         auto bypassState = calState.load();
 
+        float preampDb = apvts.getRawParameterValue ("preamp")->load();
+        float preampGain = juce::Decibels::decibelsToGain (preampDb);
+        if (preampGain != 1.0f)
+        {
+            for (int ch = 0; ch < mainInCh; ++ch)
+                mainInBuf.applyGain (ch, 0, numSamples, preampGain);
+        }
+
         int copyCh = std::min (mainInCh, mainOutCh);
         for (int ch = 0; ch < copyCh; ++ch)
             mainOutBuf.copyFrom (ch, 0, mainInBuf.getReadPointer (ch), numSamples);
