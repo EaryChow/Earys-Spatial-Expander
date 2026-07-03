@@ -25,7 +25,7 @@ SpatialExpanderAudioProcessor::SpatialExpanderAudioProcessor()
           std::make_unique<juce::AudioParameterFloat> ("leakCenter", "Leak Center",
               juce::NormalisableRange<float> (0.0f, 1.5f, 0.01f), 0.0f),
           std::make_unique<juce::AudioParameterFloat> ("crosstalk", "Crosstalk",
-              juce::NormalisableRange<float> (0.0f, 0.5f, 0.01f), 0.2f),
+              juce::NormalisableRange<float> (0.0f, 0.5f, 0.01f), 0.1f),
           std::make_unique<juce::AudioParameterFloat> ("stretch", "Stretch",
               juce::NormalisableRange<float> (0.0f, 1.0f, 0.01f), 1.0f),
           std::make_unique<juce::AudioParameterFloat> ("preamp", "Preamp",

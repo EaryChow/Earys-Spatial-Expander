@@ -125,7 +125,7 @@ Input gain. Range: **−6.0 dB to +6.0 dB**. Applied before the STFT. Useful for
 Controls how the rear channels are derived. At **0.0**, the rear channels are fully isolated from the center signal, giving maximum clarity. At **1.0**, the raw unextracted residual is used, giving the rear channels a stronger, more ambient presence. The default **0.5** blends both for a smooth transition. Lower values give cleaner rear imaging; higher values give more envelopment. This is for creative control. The blend is a linear complex mix; loudness is kept consistent automatically by the calibration system, which includes rear bias when building the ILD gain table. Changing this triggers a recalibration.
 
 ### Crosstalk
-Leaks each speaker's signal to its adjacent neighbors for smoother panning transitions. Range: **0.0 – 0.5**. Default: **0.2**. At 0, channels are completely discrete. Higher values create a more blended, continuous surround field. Applied in the frequency domain before calibration so the gain table automatically compensates for any loudness change. Changing this triggers a recalibration.
+Leaks each speaker's signal to its adjacent neighbors for smoother panning transitions. Range: **0.0 – 0.5**. Default: **0.1**. At 0, channels are completely discrete. Higher values create a more blended, continuous surround field. Applied in the frequency domain before calibration so the gain table automatically compensates for any loudness change. Changing this triggers a recalibration.
 
 ### Per-Channel Gain
 Click **"Per-Channel Gain"** to reveal individual ±12 dB trims for every speaker channel:
