@@ -155,7 +155,7 @@ The plugin includes an integrated **ITU-R BS.1770-4** loudness meter showing:
 - **Short-term** (3 s) and Short-term Max
 - **Integrated** LUFS
 
-The meter starts **paused** by default. Click **Resume** to begin accumulation, **Pause** to hold, and **Refresh** to reset the integrated history. This is useful for verifying output levels after calibration.
+The meter starts **paused** by default. Click **Resume** to begin accumulation, **Pause** to hold, and **Refresh** to reset the momentary, short-term, and integrated histories. This is useful for verifying output levels after calibration.
 
 ---
 

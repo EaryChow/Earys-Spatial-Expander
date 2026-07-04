@@ -54,8 +54,22 @@ bool LoudnessMeter::isPaused() const noexcept { return paused.load(); }
 
 void LoudnessMeter::clearHistory()
 {
+    std::fill (momentaryWindow.begin(), momentaryWindow.end(), 0.0);
+    momentaryWritePos = 0;
+    momentarySamplesFilled = 0;
+    momentaryRunningSum = 0.0;
+    momentaryLoudness.store (-70.0);
+
+    std::fill (shortWindow.begin(), shortWindow.end(), 0.0);
+    shortWritePos = 0;
+    shortSamplesFilled = 0;
+    shortRunningSum = 0.0;
+    shortTermLoudness.store (-70.0);
     shortTermMax.store (-70.0);
+
     integratedHistory.clear();
+    currentBlockPowerSum = 0.0;
+    currentBlockSamples = 0;
     integratedLoudness.store (-70.0);
 }
 
