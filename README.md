@@ -92,11 +92,15 @@ Selects the source bed layout: **Stereo**, **5.1**, or **7.1**. This determines 
 Selects the surround bed size. **Auto** is recommended—it detects the channel layout from the loaded bus and adapts the extraction cascade accordingly.
 
 ### 5.1 Surrounds as Rears in 7.1/9.1
-When using a 5.1 output format on a 7.1/9.1 bus, this checkbox controls how the 5.1 surround channels are routed and calibrated:
+When using a 5.1 output format on a 7.1/9.1 bus, this checkbox controls how the 5.1 surround channels are routed and calibrated. It also affects **input extraction** when reading 5.1 content from a 7.1/9.1 container.
 
+**Output Behavior:**
 - **Checked (default):** The 5.1 surround channels are treated as **rear** channels. They route to the rear outputs of the bus, and the calibration applies ITU-R BS.1770-4 rear channel weighting (0 dB).
-
 - **Unchecked:** The 5.1 surround channels are treated as **side** channels. They route to the side outputs of the bus, and the calibration applies ITU-R BS.1770-4 side channel weighting (+1.5 dB).
+
+**Input Behavior (5.1 Input Format on 7.1/9.1 container):**
+- **Checked:** Prefer rear channel types (`leftSurroundRear`/`rightSurroundRear`) when extracting surround content.
+- **Unchecked:** Prefer side channel types (`leftSurroundSide`/`rightSurroundSide`) when extracting surround content.
 
 This is useful when you have a 7.1/9.1 bus but want to output 5.1 content: checking the box places the surrounds at the rear positions (standard 5.1 listening experience), while unchecking places them at the side positions (wider sound stage).
 

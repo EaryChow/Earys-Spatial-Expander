@@ -636,8 +636,9 @@ void SpatialExpanderAudioProcessor::processBlock (juce::AudioBuffer<float>& buff
     {
         auto layout = getBus (true, 0)->getCurrentLayout();
         const float* l = nullptr, * r = nullptr, * c = nullptr;
-        const float* sl = nullptr, * sr = nullptr;
         const float* sdl = nullptr, * sdr = nullptr;
+        const float* srl = nullptr, * srr = nullptr;
+        const float* genSl = nullptr, * genSr = nullptr;
 
         for (int ch = 0; ch < mainInCh; ++ch)
         {
@@ -645,14 +646,14 @@ void SpatialExpanderAudioProcessor::processBlock (juce::AudioBuffer<float>& buff
             auto* ptr = mainInBuf.getReadPointer (ch);
             if      (type == juce::AudioChannelSet::left)              l = ptr;
             else if (type == juce::AudioChannelSet::right)             r = ptr;
-            else if (type == juce::AudioChannelSet::centre)              c = ptr;
-            else if (type == juce::AudioChannelSet::LFE)                 lfeInputChannel = ch;
-            else if (type == juce::AudioChannelSet::leftSurroundRear)    sl = ptr;
-            else if (type == juce::AudioChannelSet::rightSurroundRear)   sr = ptr;
-            else if (type == juce::AudioChannelSet::leftSurroundSide)   sdl = ptr;
-            else if (type == juce::AudioChannelSet::rightSurroundSide)  sdr = ptr;
-            else if (type == juce::AudioChannelSet::leftSurround && sl == nullptr) sl = ptr;
-            else if (type == juce::AudioChannelSet::rightSurround && sr == nullptr) sr = ptr;
+            else if (type == juce::AudioChannelSet::centre)            c = ptr;
+            else if (type == juce::AudioChannelSet::LFE)               lfeInputChannel = ch;
+            else if (type == juce::AudioChannelSet::leftSurroundSide)  sdl = ptr;
+            else if (type == juce::AudioChannelSet::rightSurroundSide) sdr = ptr;
+            else if (type == juce::AudioChannelSet::leftSurroundRear)  srl = ptr;
+            else if (type == juce::AudioChannelSet::rightSurroundRear) srr = ptr;
+            else if (type == juce::AudioChannelSet::leftSurround  && genSl == nullptr) genSl = ptr;
+            else if (type == juce::AudioChannelSet::rightSurround && genSr == nullptr) genSr = ptr;
         }
 
         auto idxPtr = [&](int i) { return (i < mainInCh) ? mainInBuf.getReadPointer (i) : nullptr; };
@@ -662,18 +663,32 @@ void SpatialExpanderAudioProcessor::processBlock (juce::AudioBuffer<float>& buff
 
         if (inputFmt == InputFormat::In51)
         {
-            if (sl == nullptr && sr == nullptr) { sl = sdl; sr = sdr; }
+            bool surroundAsRear = apvts.getRawParameterValue ("surroundAsRear")->load() > 0.5f;
+            const float* sl = nullptr;
+            const float* sr = nullptr;
+
+            if (surroundAsRear)
+            {
+                sl = (srl != nullptr) ? srl : (sdl != nullptr) ? sdl : genSl;
+                sr = (srr != nullptr) ? srr : (sdr != nullptr) ? sdr : genSr;
+            }
+            else
+            {
+                sl = (sdl != nullptr) ? sdl : (srl != nullptr) ? srl : genSl;
+                sr = (sdr != nullptr) ? sdr : (srr != nullptr) ? srr : genSr;
+            }
+
             if (sl == nullptr) sl = idxPtr (4);
             if (sr == nullptr) sr = idxPtr (5);
             inputPtrs = { l, r, c, sl, sr };
         }
         else // In71
         {
-            if (sdl == nullptr) sdl = (sl != nullptr) ? sl : idxPtr (4);
-            if (sdr == nullptr) sdr = (sr != nullptr) ? sr : idxPtr (5);
-            if (sl  == nullptr) sl  = idxPtr (6);
-            if (sr  == nullptr) sr  = idxPtr (7);
-            inputPtrs = { l, r, c, sdl, sdr, sl, sr };
+            if (sdl == nullptr) sdl = (genSl != nullptr) ? genSl : idxPtr (4);
+            if (sdr == nullptr) sdr = (genSr != nullptr) ? genSr : idxPtr (5);
+            if (srl == nullptr) srl = idxPtr (6);
+            if (srr == nullptr) srr = idxPtr (7);
+            inputPtrs = { l, r, c, sdl, sdr, srl, srr };
         }
 
         bool missingInput = false;
