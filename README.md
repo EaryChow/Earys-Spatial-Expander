@@ -259,6 +259,8 @@ This is applied in the frequency domain before calibration.
 ### 7. Automatic Calibration
 Because the cascade naturally changes total loudness as a source pans (a center-panned source splits into multiple correlated channels), the plugin runs an internal **automatic calibration** at startup and whenever you change format, latency, stretch, crosstalk, or rear bias.
 
+*Calibration does not normalize content loudness, its job is to make the cascade preserve original loudness.*
+
 **Calibration with perceptual weighting:**
 The plugin generates correlated white noise with a flat spectrum, sweeps the pan from hard-left to hard-right in 0.1 dB ILD steps, and runs the full cascade (including stretch, rear bias, and crosstalk) at each step. It measures the total output power using **ITU-R BS.1770-4 / BS.2051 perceptual channel weightings** (+1.5 dB for side/wide/surround channels; front, center, and rear channels are weighted at 0 dB) so that phantom images between speakers sound equally loud, not just physically equal-energy. A gain table `G[ILD]` is built that normalizes every pan position to the same perceived loudness.
 
