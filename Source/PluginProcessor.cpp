@@ -20,6 +20,7 @@ SpatialExpanderAudioProcessor::SpatialExpanderAudioProcessor()
               juce::StringArray { "Stereo", "5.1", "7.1" }, 0),
           std::make_unique<juce::AudioParameterChoice> ("outputFormat", "Output Format",
               juce::StringArray { "Auto", "3.0", "5.1", "7.1", "9.1" }, 0),
+          std::make_unique<juce::AudioParameterBool> ("surroundAsRear", "5.1 surrounds as rears in 7.1/9.1", true),
           std::make_unique<juce::AudioParameterChoice> ("latency", "Latency",
               juce::StringArray { "496", "992", "1984", "3968", "Bypass/Realtime" }, 1),
           std::make_unique<juce::AudioParameterFloat> ("leakCenter", "Leak Center",
@@ -56,6 +57,7 @@ SpatialExpanderAudioProcessor::SpatialExpanderAudioProcessor()
     apvts.addParameterListener ("latency", this);
     apvts.addParameterListener ("inputFormat", this);
     apvts.addParameterListener ("outputFormat", this);
+    apvts.addParameterListener ("surroundAsRear", this);
     apvts.addParameterListener ("rearBias", this);
     apvts.addParameterListener ("crosstalk", this);
     apvts.addParameterListener ("stretch", this);
@@ -362,18 +364,18 @@ void SpatialExpanderAudioProcessor::processBlock (juce::AudioBuffer<float>& buff
         // Route main input to aux buses based on channel types
         {
             auto inputLayout = getBus (true, 0)->getCurrentLayout();
-            const float* chC    = nullptr;
-            const float* chLFE  = nullptr;
-            const float* chWL   = nullptr, * chWR   = nullptr;
-            const float* chSL   = nullptr, * chSR   = nullptr;
-            const float* chRL   = nullptr, * chRR   = nullptr;
+            const float* chC       = nullptr;
+            const float* inputChLFE = nullptr;
+            const float* chWL       = nullptr, * chWR   = nullptr;
+            const float* chSL       = nullptr, * chSR   = nullptr;
+            const float* chRL       = nullptr, * chRR   = nullptr;
 
             for (int ch = 0; ch < mainInCh; ++ch)
             {
                 auto type = inputLayout.getTypeOfChannel (ch);
                 auto* ptr = mainInBuf.getReadPointer (ch);
                 if      (type == juce::AudioChannelSet::centre)                   chC = ptr;
-                else if (type == juce::AudioChannelSet::LFE)                      chLFE = ptr;
+                else if (type == juce::AudioChannelSet::LFE)                      inputChLFE = ptr;
                 else if (type == juce::AudioChannelSet::wideLeft)                 chWL = ptr;
                 else if (type == juce::AudioChannelSet::wideRight)                chWR = ptr;
                 else if (type == juce::AudioChannelSet::leftSurroundSide)         chSL = ptr;
@@ -420,7 +422,7 @@ void SpatialExpanderAudioProcessor::processBlock (juce::AudioBuffer<float>& buff
             auxStereo (AuxFront, mainInBuf.getReadPointer (0),
                        (mainInCh > 1) ? mainInBuf.getReadPointer (1) : nullptr);
             auxMono   (AuxCenter, chC);
-            auxMono   (AuxLFE,    chLFE);
+            auxMono   (AuxLFE,    inputChLFE);
 
             if (is916)
             {
@@ -760,6 +762,7 @@ void SpatialExpanderAudioProcessor::processBlock (juce::AudioBuffer<float>& buff
     bool is5_1 = (numSpecOut > 3 && numSpecOut <= 5);
     bool is7_1 = (numSpecOut > 5 && numSpecOut <= 7);
     bool is9_1 = (numSpecOut > 7);
+    bool surroundAsRear = apvts.getRawParameterValue ("surroundAsRear")->load() > 0.5f;
 
     static constexpr float lfePrescale = 0.355f;
     float lfeGain = (lfeLevelDb >= -12.0f) ? juce::Decibels::decibelsToGain (lfeLevelDb) * lfePrescale : 0.0f;
@@ -824,8 +827,16 @@ void SpatialExpanderAudioProcessor::processBlock (juce::AudioBuffer<float>& buff
     }
     else if (is5_1)
     {
-        candidates.push_back ({3, {juce::AudioChannelSet::leftSurroundRear, juce::AudioChannelSet::leftSurround, juce::AudioChannelSet::leftSurroundSide}});
-        candidates.push_back ({4, {juce::AudioChannelSet::rightSurroundRear, juce::AudioChannelSet::rightSurround, juce::AudioChannelSet::rightSurroundSide}});
+        if (surroundAsRear)
+        {
+            candidates.push_back ({3, {juce::AudioChannelSet::leftSurroundRear, juce::AudioChannelSet::leftSurround, juce::AudioChannelSet::leftSurroundSide}});
+            candidates.push_back ({4, {juce::AudioChannelSet::rightSurroundRear, juce::AudioChannelSet::rightSurround, juce::AudioChannelSet::rightSurroundSide}});
+        }
+        else
+        {
+            candidates.push_back ({3, {juce::AudioChannelSet::leftSurroundSide, juce::AudioChannelSet::leftSurround, juce::AudioChannelSet::leftSurroundRear}});
+            candidates.push_back ({4, {juce::AudioChannelSet::rightSurroundSide, juce::AudioChannelSet::rightSurround, juce::AudioChannelSet::rightSurroundRear}});
+        }
     }
 
     for (const auto& role : candidates)
@@ -943,6 +954,9 @@ void SpatialExpanderAudioProcessor::processBlock (juce::AudioBuffer<float>& buff
     }
 
     // ── Apply the map ──
+    int mainBusFormat = detectFormatFromBus();
+    bool mainBusHasSeparateRear = (mainBusFormat >= Fmt71);
+
     for (int ch = 0; ch < safeOutCh; ++ch)
     {
         if (is3_0 && channelIsLFE[ch])
@@ -966,6 +980,10 @@ void SpatialExpanderAudioProcessor::processBlock (juce::AudioBuffer<float>& buff
             mainOutBuf.clear (ch, 0, numSamples);
         }
     }
+
+    float rearSurroundGain = 1.0f;
+    if (surroundAsRear && !mainBusHasSeparateRear && numSpecOut > 3)
+        rearSurroundGain = juce::Decibels::decibelsToGain (1.5f);
 
     // ── AUX BUSES ──
     for (int busIdx = 1; busIdx < getBusCount(false); ++busIdx)
@@ -1022,6 +1040,12 @@ void SpatialExpanderAudioProcessor::processBlock (juce::AudioBuffer<float>& buff
                     if (numBusCh > 1)
                         juce::FloatVectorOperations::copy(busBuffer.getWritePointer(1), chOutputs[4].data(), numSamples);
                 }
+                else if (numSpecOut > 3 && !surroundAsRear)
+                {
+                    juce::FloatVectorOperations::copy(busBuffer.getWritePointer(0), chOutputs[3].data(), numSamples);
+                    if (numBusCh > 1)
+                        juce::FloatVectorOperations::copy(busBuffer.getWritePointer(1), chOutputs[4].data(), numSamples);
+                }
                 else busBuffer.clear();
                 break;
             case AuxRear:
@@ -1039,9 +1063,22 @@ void SpatialExpanderAudioProcessor::processBlock (juce::AudioBuffer<float>& buff
                 }
                 else if (numSpecOut > 3)
                 {
-                    juce::FloatVectorOperations::copy(busBuffer.getWritePointer(0), chOutputs[3].data(), numSamples);
-                    if (numBusCh > 1)
-                        juce::FloatVectorOperations::copy(busBuffer.getWritePointer(1), chOutputs[4].data(), numSamples);
+                    if (rearSurroundGain != 1.0f)
+                    {
+                        juce::FloatVectorOperations::copy(busBuffer.getWritePointer(0), chOutputs[3].data(), numSamples);
+                        juce::FloatVectorOperations::multiply(busBuffer.getWritePointer(0), rearSurroundGain, numSamples);
+                        if (numBusCh > 1)
+                        {
+                            juce::FloatVectorOperations::copy(busBuffer.getWritePointer(1), chOutputs[4].data(), numSamples);
+                            juce::FloatVectorOperations::multiply(busBuffer.getWritePointer(1), rearSurroundGain, numSamples);
+                        }
+                    }
+                    else
+                    {
+                        juce::FloatVectorOperations::copy(busBuffer.getWritePointer(0), chOutputs[3].data(), numSamples);
+                        if (numBusCh > 1)
+                            juce::FloatVectorOperations::copy(busBuffer.getWritePointer(1), chOutputs[4].data(), numSamples);
+                    }
                 }
                 else busBuffer.clear();
                 break;
@@ -1266,7 +1303,8 @@ void SpatialExpanderAudioProcessor::parameterChanged (const juce::String& parame
         fadeSamplesLeft.store (fadeSamplesTotal);
         calState.store (CalState::FadingOut);
     }
-    else if (parameterID == "crosstalk" || parameterID == "stretch" || parameterID == "rearBias")
+    else if (parameterID == "crosstalk" || parameterID == "stretch" || parameterID == "rearBias"
+             || parameterID == "surroundAsRear")
     {
         if (calState.load() != CalState::Normal || measPhase.load() != 0)
             return;
@@ -2660,13 +2698,49 @@ void SpatialExpanderAudioProcessor::runCalibration()
                             fftSize, numSpecOut, crosstalkVal);
         }
 
-        // ITU-R BS.1770-4 / BS.2051 position-dependent weighting
-        // |θ| < 60°            → 1.00  (Front, Center)
-        // 60° ≤ |θ| ≤ 120°     → 1.41  (Wide, Side, 5.1 Surround)
-        // 120° < |θ| ≤ 180°    → 1.00  (Rear)
         static constexpr double wFront = 1.0;
         static constexpr double wSide  = 1.41;
         static constexpr double wRear  = 1.0;
+
+        bool surroundAsRear = apvts.getRawParameterValue ("surroundAsRear")->load() > 0.5f;
+        int busFormat = detectFormatFromBus();
+        bool busHasSeparateRear = (busFormat >= Fmt71);
+
+        std::array<double, 9> spectralAzimuth = {0.0, -30.0, 30.0, -90.0, 90.0, -110.0, 110.0, -135.0, 135.0};
+
+        if (numSpecOut == 5)
+        {
+            if (busHasSeparateRear)
+            {
+                if (surroundAsRear)
+                {
+                    spectralAzimuth[3] = -135.0;
+                    spectralAzimuth[4] = 135.0;
+                }
+                else
+                {
+                    spectralAzimuth[3] = -90.0;
+                    spectralAzimuth[4] = 90.0;
+                }
+            }
+            else
+            {
+                spectralAzimuth[3] = -110.0;
+                spectralAzimuth[4] = 110.0;
+            }
+        }
+
+        auto azimuthToWeight = [&](double azimuth) -> double
+        {
+            double absAz = std::abs (azimuth);
+            if (absAz < 60.0) return wFront;
+            if (absAz <= 120.0) return wSide;
+            return wRear;
+        };
+
+        std::array<double, 9> spectralWeight;
+        for (int i = 0; i < 9; ++i)
+            spectralWeight[i] = azimuthToWeight (spectralAzimuth[i]);
 
         auto measurePower = [&](float* buf) -> double
         {
@@ -2704,17 +2778,17 @@ void SpatialExpanderAudioProcessor::runCalibration()
             pRL = measurePower (fftRearL.data());  pRR = measurePower (fftRearR.data());
         }
 
-        double totalPower = pC*wFront + pFL*wFront + pFR*wFront;
+        double totalPower = pC*spectralWeight[0] + pFL*spectralWeight[1] + pFR*spectralWeight[2];
 
         if (numSpecOut > 7)
-            totalPower += pWL*wSide + pWR*wSide
-                        + pSL*wSide + pSR*wSide
-                        + pRL*wRear + pRR*wRear;
+            totalPower += pWL*spectralWeight[3] + pWR*spectralWeight[4]
+                        + pSL*spectralWeight[5] + pSR*spectralWeight[6]
+                        + pRL*spectralWeight[7] + pRR*spectralWeight[8];
         else if (numSpecOut > 5)
-            totalPower += pSL*wSide + pSR*wSide
-                        + pRL*wRear + pRR*wRear;
+            totalPower += pSL*spectralWeight[3] + pSR*spectralWeight[4]
+                        + pRL*spectralWeight[5] + pRR*spectralWeight[6];
         else if (numSpecOut > 3)
-            totalPower += pRL*wSide + pRR*wSide;
+            totalPower += pRL*spectralWeight[3] + pRR*spectralWeight[4];
 
         float inputPower = panL * panL + panR * panR;
         newTable[static_cast<size_t> (iIdx)] = (totalPower > 1e-18)

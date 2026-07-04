@@ -64,6 +64,13 @@ SpatialExpanderAudioProcessorEditor::SpatialExpanderAudioProcessorEditor (
     formatAttach = std::make_unique<juce::AudioProcessorValueTreeState::ComboBoxAttachment>(
         processor.getAPVTS(), "outputFormat", formatComboBox);
 
+    surroundAsRearToggle.setButtonText ("5.1 surrounds as rears in 7.1/9.1");
+    surroundAsRearToggle.setToggleState (true, juce::dontSendNotification);
+    addAndMakeVisible (surroundAsRearToggle);
+    surroundAsRearAttach = std::make_unique<juce::AudioProcessorValueTreeState::ButtonAttachment>(
+        processor.getAPVTS(), "surroundAsRear", surroundAsRearToggle);
+    surroundAsRearToggle.onClick = [this] { processor.beginRecalibrationGesture(); processor.endRecalibrationGesture(); };
+
     leakCenterLabel.setText ("Leak Center", juce::dontSendNotification);
     leakCenterLabel.setJustificationType (juce::Justification::centred);
     addAndMakeVisible (leakCenterLabel);
@@ -355,6 +362,9 @@ void SpatialExpanderAudioProcessorEditor::resized()
     formatLabel.setBounds (fmtArea.removeFromTop (20));
     formatComboBox.setBounds (fmtArea.reduced (60, 0));
 
+    auto surroundToggleArea = area.removeFromTop (24);
+    surroundAsRearToggle.setBounds (surroundToggleArea.reduced (20, 0));
+
     auto latArea = area.removeFromTop (45);
     latencyLabel.setBounds (latArea.removeFromTop (20));
     latencyComboBox.setBounds (latArea.reduced (60, 0));
@@ -495,6 +505,7 @@ void SpatialExpanderAudioProcessorEditor::timerCallback()
 
         formatComboBox.setEnabled (!bypass);
         formatLabel.setEnabled    (!bypass);
+        surroundAsRearToggle.setEnabled (!bypass);
 
         leakCenterSlider.setEnabled (!bypass);
         leakCenterLabel.setEnabled  (!bypass);

@@ -38,6 +38,9 @@ private:
     juce::Label formatLabel;
     std::unique_ptr<juce::AudioProcessorValueTreeState::ComboBoxAttachment> formatAttach;
 
+    juce::ToggleButton surroundAsRearToggle;
+    std::unique_ptr<juce::AudioProcessorValueTreeState::ButtonAttachment> surroundAsRearAttach;
+
     void updateLatencyComboBox();
 
     juce::ComboBox latencyComboBox;

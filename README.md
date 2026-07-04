@@ -65,7 +65,7 @@ Higher latency = larger FFT = better frequency resolution and cleaner extraction
 
 **Bypass/Realtime** passes audio through unchanged with zero latency and minimal CPU. This is useful for A/B comparison.
 
-**Note:** Switching latency, output format, crosstalk, stretch, or rear bias during playback causes a brief recalibration pause (~50–100 ms) after you release the control.
+**Note:** Switching latency, output format, 5.1 surrounds as rears mode, crosstalk, stretch, or rear bias during playback causes a brief recalibration pause (~50–100 ms) after you release the control.
 
 ### 4. Adjust to taste
 Use the parameters described below to shape the upmix. 
@@ -90,6 +90,17 @@ Selects the source bed layout: **Stereo**, **5.1**, or **7.1**. This determines 
 
 ### Output Format
 Selects the surround bed size. **Auto** is recommended—it detects the channel layout from the loaded bus and adapts the extraction cascade accordingly.
+
+### 5.1 Surrounds as Rears in 7.1/9.1
+When using a 5.1 output format on a 7.1/9.1 bus, this checkbox controls how the 5.1 surround channels are routed and calibrated:
+
+- **Checked (default):** The 5.1 surround channels are treated as **rear** channels. They route to the rear outputs of the bus, and the calibration applies ITU-R BS.1770-4 rear channel weighting (0 dB).
+
+- **Unchecked:** The 5.1 surround channels are treated as **side** channels. They route to the side outputs of the bus, and the calibration applies ITU-R BS.1770-4 side channel weighting (+1.5 dB).
+
+This is useful when you have a 7.1/9.1 bus but want to output 5.1 content: checking the box places the surrounds at the rear positions (standard 5.1 listening experience), while unchecking places them at the side positions (wider sound stage).
+
+**Note:** This parameter only affects 5.1 output format on buses with separate rear channels (7.1/9.1). For pure 5.1 buses, the surrounds always use standard 5.1 side weighting (+1.5 dB). Changing this triggers a recalibration.
 
 ### Quality / Latency
 The plugin does have latency, and it's required by the algorithm. It needs larger latency budget for higher sound quality. The UI shows the latency in both **samples** and **milliseconds** (updated dynamically for your session sample rate). There are four tiers of quality/latency modes plus a Bypass mode to choose from, default to Low-Mid tier.
