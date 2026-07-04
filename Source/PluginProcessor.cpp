@@ -753,6 +753,15 @@ void SpatialExpanderAudioProcessor::processBlock (juce::AudioBuffer<float>& buff
         lfe.process (inL, inR, chLFE.data(), numSamples);
     }
 
+    {
+        static constexpr float lfePrescale = 0.355f;
+        float lfeGain = (lfeLevelDb >= -12.0f)
+            ? juce::Decibels::decibelsToGain (lfeLevelDb) * lfePrescale
+            : 0.0f;
+        if (lfeGain != 1.0f)
+            juce::FloatVectorOperations::multiply (chLFE.data(), lfeGain, numSamples);
+    }
+
     // ── Leak Center ──
     {
         float leak = apvts.getRawParameterValue ("leakCenter")->load();
@@ -778,9 +787,6 @@ void SpatialExpanderAudioProcessor::processBlock (juce::AudioBuffer<float>& buff
     bool is7_1 = (numSpecOut > 5 && numSpecOut <= 7);
     bool is9_1 = (numSpecOut > 7);
     bool surroundAsRear = apvts.getRawParameterValue ("surroundAsRear")->load() > 0.5f;
-
-    static constexpr float lfePrescale = 0.355f;
-    float lfeGain = (lfeLevelDb >= -12.0f) ? juce::Decibels::decibelsToGain (lfeLevelDb) * lfePrescale : 0.0f;
 
     int safeOutCh = std::min (mainOutCh, mainOutBuf.getNumChannels());
     std::vector<int> channelMap (safeOutCh, -1);
@@ -981,10 +987,7 @@ void SpatialExpanderAudioProcessor::processBlock (juce::AudioBuffer<float>& buff
         }
         if (channelIsLFE[ch])
         {
-            if (lfeGain > 0.0f)
-                juce::FloatVectorOperations::multiply (mainOutBuf.getWritePointer (ch), chLFE.data(), lfeGain, numSamples);
-            else
-                mainOutBuf.clear (ch, 0, numSamples);
+            juce::FloatVectorOperations::copy (mainOutBuf.getWritePointer (ch), chLFE.data(), numSamples);
         }
         else if (channelMap[ch] >= 0 && channelMap[ch] < numSpecOut)
         {
@@ -1029,9 +1032,10 @@ void SpatialExpanderAudioProcessor::processBlock (juce::AudioBuffer<float>& buff
                 else busBuffer.clear();
                 break;
             case AuxLFE:
-                if (numSpecOut > 3 && lfeGain > 0.0f)
-                    juce::FloatVectorOperations::multiply(busBuffer.getWritePointer(0), chLFE.data(), lfeGain, numSamples);
-                else busBuffer.clear();
+                if (numSpecOut > 3)
+                    juce::FloatVectorOperations::copy(busBuffer.getWritePointer(0), chLFE.data(), numSamples);
+                else
+                    busBuffer.clear();
                 break;
             case AuxWide:
                 if (numSpecOut > 7)
