@@ -65,7 +65,7 @@ SpatialExpanderAudioProcessorEditor::SpatialExpanderAudioProcessorEditor (
         processor.getAPVTS(), "outputFormat", formatComboBox);
 
     surroundAsRearToggle.setButtonText ("5.1 surrounds as rears in 7.1/9.1");
-    surroundAsRearToggle.setToggleState (true, juce::dontSendNotification);
+    surroundAsRearToggle.setToggleState (false, juce::dontSendNotification);
     addAndMakeVisible (surroundAsRearToggle);
     surroundAsRearAttach = std::make_unique<juce::AudioProcessorValueTreeState::ButtonAttachment>(
         processor.getAPVTS(), "surroundAsRear", surroundAsRearToggle);

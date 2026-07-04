@@ -20,7 +20,7 @@ SpatialExpanderAudioProcessor::SpatialExpanderAudioProcessor()
               juce::StringArray { "Stereo", "5.1", "7.1" }, 0),
           std::make_unique<juce::AudioParameterChoice> ("outputFormat", "Output Format",
               juce::StringArray { "Auto", "3.0", "5.1", "7.1", "9.1" }, 0),
-          std::make_unique<juce::AudioParameterBool> ("surroundAsRear", "5.1 surrounds as rears in 7.1/9.1", true),
+          std::make_unique<juce::AudioParameterBool> ("surroundAsRear", "5.1 surrounds as rears in 7.1/9.1", false),
           std::make_unique<juce::AudioParameterChoice> ("latency", "Latency",
               juce::StringArray { "496", "992", "1984", "3968", "Bypass/Realtime" }, 1),
           std::make_unique<juce::AudioParameterFloat> ("leakCenter", "Leak Center",
