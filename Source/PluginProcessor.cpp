@@ -2889,7 +2889,8 @@ juce::String SpatialExpanderAudioProcessor::getDebugText() const
             name = "Ch" + juce::String (static_cast<int> (i));
 
         if (count > 0) text += "\n";
-        text += name + " " + juce::String (ch.kWeightedDbfs, 1)
+        juce::String dbfsStr = ch.kWeightedDbfs <= -69.0 ? "--" : juce::String (ch.kWeightedDbfs, 1);
+        text += name + " " + dbfsStr
               + " dBFS(w=" + juce::String (ch.weight, 2) + ")";
         ++count;
     }
