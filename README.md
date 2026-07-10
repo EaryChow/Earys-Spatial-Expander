@@ -6,7 +6,13 @@ It supports **3.0, 5.1, 7.1, and 9.1** output formats (9.1 requires a 9.1.6 bus 
 
 Currently only tested on Windows ×64, since that's what the repo owner is using.
 
+Demo Video here:
+BiliBili: https://www.bilibili.com/video/BV1FMTC6GEpe
+YouTube: https://www.youtube.com/watch?v=maIZU22Czx4
+
 **Attribution:** This plugin was inspired by the repo owner's experience cascading instances of [Bertom Audio Phantom Center](https://bertomaudio.com/phantom-center.html) in [Cantabile Lite](https://www.cantabilesoftware.com/free-vst-host). The single-layer phantom-center extraction algorithm is a well-established technique; the multi-layer cascade and spatial stretching concept are original to this project.
+
+The project was developed through iterative LLM-assisted collaboration. The repo owner directed the architecture and facilitated a multi-round peer-review process between independent LLM instances for both the design spec and implementation. Technical disputes were resolved through empirical validation, with results fed back to refine the design and code.
 
 ---
 
