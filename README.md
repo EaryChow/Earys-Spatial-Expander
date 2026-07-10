@@ -12,7 +12,7 @@ YouTube: https://www.youtube.com/watch?v=maIZU22Czx4
 
 **Attribution:** This plugin was inspired by the repo owner's experience cascading instances of [Bertom Audio Phantom Center](https://bertomaudio.com/phantom-center.html) in [Cantabile Lite](https://www.cantabilesoftware.com/free-vst-host). The single-layer phantom-center extraction algorithm is a well-established technique; the multi-layer cascade and spatial stretching concept are original to this project.
 
-The project was developed through iterative LLM-assisted collaboration. The repo owner directed the architecture and facilitated a multi-round peer-review process between independent LLM instances for both the design spec and implementation. Technical disputes were resolved through empirical validation, with results fed back to refine the design and code.
+This project was built with massive iterative LLM assistance, most codes were generated instead of written. The repo owner directed the architecture and used separate LLM instances for multi-round review of both the design spec and implementation. Where LLM outputs gave conflicting technical guidance, the repo owner validated behavior empirically, with results fed back to refine the design and code.
 
 ---
 
